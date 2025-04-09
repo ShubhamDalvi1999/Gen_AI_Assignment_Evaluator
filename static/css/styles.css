@@ -1,0 +1,487 @@
+/* Basic styles */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    background-color: #f5f7fa;
+    color: #333;
+}
+
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+h1, h2, h3, h4 {
+    color: #2c3e50;
+    margin-bottom: 15px;
+}
+
+h1 {
+    text-align: center;
+    margin-bottom: 30px;
+    color: #3498db;
+}
+
+/* Form styles */
+.form-group {
+    margin-bottom: 20px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+input[type="file"],
+select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #fff;
+    font-size: 16px;
+}
+
+button {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-right: 10px;
+}
+
+button:hover {
+    background-color: #2980b9;
+}
+
+button#tokenCheckBtn {
+    background-color: #2ecc71;
+}
+
+button#tokenCheckBtn:hover {
+    background-color: #27ae60;
+}
+
+/* Info box */
+.info-box {
+    background-color: #eaf2f8;
+    border-left: 4px solid #3498db;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+}
+
+.info-box h4 {
+    margin-top: 0;
+    color: #3498db;
+}
+
+/* Loading spinner */
+#loading, .loading-indicator {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 40px 0;
+}
+
+.spinner {
+    border: 5px solid #f3f3f3;
+    border-radius: 50%;
+    border-top: 5px solid #3498db;
+    width: 50px;
+    height: 50px;
+    animation: spin 1s linear infinite;
+    margin-bottom: 15px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Results styling */
+#result {
+    margin-top: 40px;
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 25px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.error-message {
+    color: #e74c3c;
+    background-color: #fadbd8;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+
+/* Score circle */
+.score-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 30px;
+}
+
+.score-circle {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 28px;
+    font-weight: bold;
+    color: white;
+    margin-bottom: 10px;
+}
+
+.high-score {
+    background-color: #2ecc71;
+}
+
+.medium-score {
+    background-color: #f39c12;
+}
+
+.low-score {
+    background-color: #e74c3c;
+}
+
+/* Stats container for Q&A evaluations */
+.stats-container {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 30px;
+    text-align: center;
+}
+
+.stat-item {
+    flex: 1;
+    margin: 0 10px;
+}
+
+.stat-value {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 20px;
+    font-weight: bold;
+    color: white;
+    margin: 0 auto 10px;
+}
+
+/* Structure analysis table */
+.structure-analysis {
+    margin-bottom: 30px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+th, td {
+    padding: 12px 15px;
+    border-bottom: 1px solid #ddd;
+    text-align: left;
+}
+
+th {
+    background-color: #f2f2f2;
+    font-weight: 600;
+}
+
+tr:hover {
+    background-color: #f9f9f9;
+}
+
+.status-match {
+    color: #2ecc71;
+    font-weight: bold;
+}
+
+.status-mismatch {
+    color: #e74c3c;
+    font-weight: bold;
+}
+
+/* Feedback & similar functions */
+.feedback-section, .similar-functions, .summary-section, .qa-evaluations {
+    margin-bottom: 30px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    padding: 20px;
+    background-color: #f9f9f9;
+}
+
+.feedback-content, .summary-content {
+    line-height: 1.8;
+}
+
+/* QA comparison styles */
+.qa-comparison {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.qa-item {
+    background-color: white;
+    border-radius: 4px;
+    padding: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.qa-item h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #3498db;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+
+.quality-indicator {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 10px;
+}
+
+/* Accordion for similar functions */
+.accordion {
+    width: 100%;
+}
+
+.accordion-item {
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.accordion-button {
+    background-color: #f1f1f1;
+    color: #333;
+    cursor: pointer;
+    padding: 15px;
+    width: 100%;
+    text-align: left;
+    border: none;
+    outline: none;
+    transition: 0.4s;
+    font-weight: 500;
+}
+
+.accordion-button:hover, .accordion-button.active {
+    background-color: #ddd;
+}
+
+.accordion-content {
+    padding: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease-out;
+    background-color: #fff;
+}
+
+.accordion-content pre {
+    margin: 0;
+    padding: 15px;
+    overflow-x: auto;
+    background-color: #f8f8f8;
+    border-top: 1px solid #ddd;
+}
+
+/* Token info */
+.token-info {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f8f8f8;
+    border-radius: 4px;
+    border-left: 4px solid #3498db;
+}
+
+.token-info h4 {
+    margin-top: 0;
+    color: #3498db;
+}
+
+.token-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+}
+
+.token-table tr {
+    border-bottom: 1px solid #eee;
+}
+
+.token-table tr:last-child {
+    border-bottom: none;
+}
+
+.token-table td {
+    padding: 8px 4px;
+}
+
+.token-table .token-count {
+    text-align: right;
+    font-family: monospace;
+    font-size: 14px;
+}
+
+.token-table .total-row {
+    border-top: 2px solid #ddd;
+    font-weight: bold;
+}
+
+/* Styles for evaluation ID */
+.evaluation-id {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 15px;
+    text-align: right;
+    font-family: monospace;
+}
+
+/* Enhanced similarity metrics display */
+.similarity-metrics {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 5px;
+    margin-top: 5px;
+}
+
+.similarity-metrics p {
+    margin: 5px 0;
+    display: flex;
+    justify-content: space-between;
+}
+
+.similarity-metrics p strong {
+    margin-right: 10px;
+}
+
+/* Token table styles */
+.token-info {
+    margin: 15px 0;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+}
+
+.token-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+}
+
+.token-table th, .token-table td {
+    border: 1px solid #dee2e6;
+    padding: 8px;
+    text-align: left;
+}
+
+.token-table th {
+    background-color: #f1f1f1;
+}
+
+.token-table td:last-child {
+    text-align: right;
+}
+
+.total-row {
+    border-top: 2px solid #dee2e6;
+    font-weight: bold;
+}
+
+/* Key concepts lists styling */
+.qa-item ul {
+    padding-left: 20px;
+    margin-bottom: 10px;
+}
+
+.qa-item li {
+    margin-bottom: 4px;
+    line-height: 1.4;
+}
+
+.key-concepts-present li {
+    color: #27ae60;
+}
+
+.key-concepts-missing li {
+    color: #e74c3c;
+}
+
+/* Numerical score display */
+.numerical-score {
+    font-size: 18px;
+    font-weight: bold;
+    margin: 5px 0;
+    color: #3498db;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    button {
+        width: 100%;
+        margin-bottom: 10px;
+        margin-right: 0;
+    }
+    
+    .score-circle {
+        width: 100px;
+        height: 100px;
+        font-size: 24px;
+    }
+    
+    .stat-value {
+        width: 50px;
+        height: 50px;
+        font-size: 18px;
+    }
+    
+    th, td {
+        padding: 8px 10px;
+    }
+    
+    .stats-container {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .stat-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .stat-value {
+        margin: 0;
+    }
+} 

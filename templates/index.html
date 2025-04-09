@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assignment Checker</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        /* Tab styles */
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            font-size: 17px;
+            color: #555;
+        }
+        
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        
+        .tab button.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .tabcontent {
+            display: none;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            border-top: none;
+            animation: fadeEffect 1s;
+        }
+        
+        @keyframes fadeEffect {
+            from {opacity: 0;}
+            to {opacity: 1;}
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Assignment Checker</h1>
+        
+        <!-- Tab navigation -->
+        <div class="tab">
+            <button class="tablinks active" onclick="openTab(event, 'CodeEval')">Code Evaluation</button>
+            <button class="tablinks" onclick="openTab(event, 'TextEval')">Text Q&A Evaluation</button>
+        </div>
+        
+        <!-- Code Evaluation Tab -->
+        <div id="CodeEval" class="tabcontent" style="display: block;">
+            <h2>Code Evaluation</h2>
+            <p>Upload ZIP files containing Python code to evaluate the student's submission against an ideal solution.</p>
+            
+            <form id="uploadForm">
+                <div class="form-group">
+                    <label for="submission">Student Submission (ZIP):</label>
+                    <input type="file" id="submission" name="submission" accept=".zip" required>
+                </div>
+                <div class="form-group">
+                    <label for="ideal">Ideal Solution (ZIP):</label>
+                    <input type="file" id="ideal" name="ideal" accept=".zip" required>
+                </div>
+                <div class="form-group">
+                    <label for="model">Model:</label>
+                    <select id="model" name="model" required>
+                        <option value="ollama">Ollama (Local)</option>
+                        <option value="openai">OpenAI</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="use_openai_feedback" name="use_openai_feedback" value="true">
+                        Use OpenAI for Better Feedback Generation
+                    </label>
+                </div>
+                <div id="tokenInfo" class="token-info" style="display: none;"></div>
+                <div class="form-group">
+                    <button type="button" id="tokenCheckBtn">Check Tokens</button>
+                    <button type="submit" id="evaluateBtn">Evaluate Code</button>
+                </div>
+            </form>
+            
+            <div id="loading">
+                <div class="spinner"></div>
+                <p>Processing your submission...</p>
+            </div>
+            
+            <div id="result"></div>
+        </div>
+        
+        <!-- Text Q&A Evaluation Tab -->
+        <div id="TextEval" class="tabcontent">
+            <h2>Text Q&A Evaluation</h2>
+            <p>Upload DOCX files to evaluate student's question-answer responses against ideal answers.</p>
+            
+            <div class="info-box">
+                <h4>How it works</h4>
+                <p>The system extracts question-answer pairs from both documents, compares them using AI, and provides feedback on quality.</p>
+            </div>
+            
+            <form id="textForm">
+                <div class="form-group">
+                    <label for="textSubmission">Student Submission (DOCX):</label>
+                    <input type="file" id="textSubmission" name="submission" accept=".docx" required>
+                </div>
+                <div class="form-group">
+                    <label for="textIdeal">Ideal Answer (DOCX):</label>
+                    <input type="file" id="textIdeal" name="ideal" accept=".docx" required>
+                </div>
+                <div class="form-group">
+                    <label for="textModel">Model:</label>
+                    <select id="textModel" name="model" required>
+                        <option value="ollama">Ollama (Local)</option>
+                        <option value="openai">OpenAI</option>
+                    </select>
+                </div>
+                <div id="textTokenInfo" class="token-info" style="display: none;"></div>
+                <div class="form-group">
+                    <button type="button" id="checkTextTokensBtn">Check Tokens</button>
+                    <button type="submit" id="evaluateTextBtn">Evaluate Text</button>
+                </div>
+            </form>
+            
+            <div id="textLoading" class="loading-indicator" style="display: none;">
+                <div class="spinner"></div>
+                <p>Evaluating answers... This may take a few moments.</p>
+            </div>
+            
+            <div id="textResult" class="results-container"></div>
+        </div>
+    </div>
+    
+    <!-- Display MongoDB connection errors -->
+    <div id="mongodb-error" class="alert alert-danger" style="display: none;">
+        <strong>MongoDB Connection Error:</strong> <span id="mongodb-error-message"></span>
+        <p>Please check your MongoDB URI in the .env file and restart the application.</p>
+    </div>
+    
+    <script src="/static/js/main.js"></script>
+    <script>
+        // Tab functionality
+        function openTab(evt, tabName) {
+            var i, tabcontent, tablinks;
+            
+            // Hide all tab content
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            
+            // Remove 'active' class from all tab buttons
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            
+            // Show current tab and add 'active' class to the button
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+        
+        // Token check button functionality for code evaluation
+        document.getElementById('tokenCheckBtn').addEventListener('click', async () => {
+            const submission = document.getElementById('submission').files[0];
+            const ideal = document.getElementById('ideal').files[0];
+            
+            if (!submission || !ideal) {
+                alert('Please select both student submission and ideal answer files.');
+                return;
+            }
+            
+            const tokenInfo = document.getElementById('tokenInfo');
+            tokenInfo.innerHTML = '<p>Estimating token usage...</p>';
+            tokenInfo.style.display = 'block';
+            
+            const formData = new FormData();
+            formData.append('submission', submission);
+            formData.append('ideal', ideal);
+            
+            try {
+                const response = await fetch('/estimate-tokens', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    tokenInfo.innerHTML = `<p class="error-message">${data.message}</p>`;
+                } else {
+                    tokenInfo.innerHTML = `
+                        <h4>Token Estimate</h4>
+                        <p>Student Code: ${data.student_tokens} tokens</p>
+                        <p>Ideal Code: ${data.ideal_tokens} tokens</p>
+                        <p>Overhead: ${data.structure_overhead + data.retrieval_overhead + data.prompt_overhead} tokens</p>
+                        <p>Total: ${data.total_estimate} tokens</p>
+                        <p style="color: ${data.is_safe ? 'green' : 'red'}">
+                            <strong>${data.is_safe ? '✓ Safe to process' : '⚠ May exceed token limits'}</strong>
+                        </p>
+                    `;
+                }
+            } catch (error) {
+                tokenInfo.innerHTML = `<p class="error-message">Error estimating tokens: ${error.message}</p>`;
+            }
+        });
+        
+        // Token check button functionality for text evaluation
+        document.getElementById('checkTextTokensBtn').addEventListener('click', function() {
+            // Get the file inputs
+            const studentSubmissionInput = document.getElementById('textSubmission');
+            const idealAnswerInput = document.getElementById('textIdeal');
+            
+            // Check if files are selected
+            if (!studentSubmissionInput.files[0]) {
+                alert('Please select a student submission file.');
+                return;
+            }
+            if (!idealAnswerInput.files[0]) {
+                alert('Please select an ideal answer file.');
+                return;
+            }
+            
+            // Show loading indicator
+            const tokenInfo = document.getElementById('textTokenInfo');
+            tokenInfo.innerHTML = '<div class="spinner-border text-primary" role="status"></div> Estimating token usage...';
+            tokenInfo.style.display = 'block';
+            
+            // Create FormData and append files
+            const formData = new FormData();
+            formData.append('submission', studentSubmissionInput.files[0]);
+            formData.append('ideal', idealAnswerInput.files[0]);
+            
+            // Send request to estimate tokens
+            fetch('/estimate-tokens', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'error') {
+                    tokenInfo.innerHTML = `<div class="alert alert-danger">Error: ${data.message}</div>`;
+                    return;
+                }
+                
+                // Format numbers with commas for readability
+                const formatNumber = (num) => num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+                
+                // Create tokens table with more detailed information
+                let tableContent = `
+                    <h4>Token Estimation Results</h4>
+                    <table class="token-table">
+                        <tr>
+                            <th>Component</th>
+                            <th>Token Count</th>
+                        </tr>
+                        <tr>
+                            <td>Student Submission</td>
+                            <td>${formatNumber(data.student_tokens)}</td>
+                        </tr>
+                        <tr>
+                            <td>Ideal Answer</td>
+                            <td>${formatNumber(data.ideal_tokens)}</td>
+                        </tr>`;
+                        
+                // Add appropriate overhead rows based on file type
+                if (data.file_type === 'text') {
+                    tableContent += `
+                        <tr>
+                            <td>Comparison Overhead</td>
+                            <td>${formatNumber(data.comparison_overhead)}</td>
+                        </tr>
+                        <tr>
+                            <td>Q&A Extraction Overhead</td>
+                            <td>${formatNumber(data.qa_extraction_overhead)}</td>
+                        </tr>`;
+                } else {
+                    tableContent += `
+                        <tr>
+                            <td>Structure Analysis</td>
+                            <td>${formatNumber(data.structure_overhead)}</td>
+                        </tr>
+                        <tr>
+                            <td>Retrieval Overhead</td>
+                            <td>${formatNumber(data.retrieval_overhead)}</td>
+                        </tr>`;
+                }
+                
+                tableContent += `
+                        <tr>
+                            <td>Prompt Overhead</td>
+                            <td>${formatNumber(data.prompt_overhead)}</td>
+                        </tr>
+                        <tr>
+                            <td>Safety Margin</td>
+                            <td>${formatNumber(data.safety_margin)}</td>
+                        </tr>
+                        <tr class="total-row">
+                            <td><strong>Total Estimated Tokens</strong></td>
+                            <td><strong>${formatNumber(data.total_estimate)}</strong></td>
+                        </tr>
+                    </table>
+                    <div class="${data.is_safe ? 'alert alert-success' : 'alert alert-warning'} mt-3">
+                        ${data.is_safe ? 
+                          'Token usage is within safe limits. You can proceed with evaluation.' :
+                          'Warning: Token usage is high. The evaluation might fail or be truncated.'}
+                    </div>`;
+                    
+                tokenInfo.innerHTML = tableContent;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                tokenInfo.innerHTML = `<div class="alert alert-danger">An error occurred while estimating tokens. Please try again.</div>`;
+            });
+        });
+        
+        // Text evaluation form submission
+        document.getElementById('textForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const submission = document.getElementById('textSubmission').files[0];
+            const ideal = document.getElementById('textIdeal').files[0];
+            const model = document.getElementById('textModel').value;
+            
+            if (!submission || !ideal) {
+                alert('Please select both student submission and ideal answer files.');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('submission', submission);
+            formData.append('ideal', ideal);
+            formData.append('model', model);
+            
+            const textLoading = document.getElementById('textLoading');
+            const textResult = document.getElementById('textResult');
+            
+            textLoading.style.display = 'flex';
+            textResult.style.display = 'none';
+            
+            try {
+                const response = await fetch('/evaluate-text', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    textResult.innerHTML = `<div class="error-message"><h3>Error</h3><p>${data.message}</p></div>`;
+                } else {
+                    // Format the evaluation ID if available
+                    const evaluationId = data.evaluation_id ? 
+                        `<div class="evaluation-id">Evaluation ID: ${data.evaluation_id}</div>` : '';
+                    
+                    let resultHtml = `
+                        <h2>Text Q&A Evaluation Results</h2>
+                        ${evaluationId}
+                        <div class="score-container">
+                            <div class="score-circle ${getScoreClass(data.stats.overall_score/100)}">
+                                ${data.stats.overall_score}%
+                            </div>
+                            <p>Overall Score</p>
+                        </div>
+                        
+                        <div class="stats-container">
+                            <div class="stat-item">
+                                <div class="stat-value high-score">${data.stats.high_count}</div>
+                                <p>High Quality</p>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value medium-score">${data.stats.medium_count}</div>
+                                <p>Medium Quality</p>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value low-score">${data.stats.low_count}</div>
+                                <p>Low Quality</p>
+                            </div>
+                        </div>
+                        
+                        <div class="summary-section">
+                            <h3>Summary Feedback</h3>
+                            <div class="summary-content">${data.summary.replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `;
+                    
+                    // Add individual Q&A evaluations if available
+                    if (data.evaluations && data.evaluations.length > 0) {
+                        resultHtml += `
+                            <div class="qa-evaluations">
+                                <h3>Individual Question Evaluations</h3>
+                                <div class="accordion">
+                        `;
+                        
+                        data.evaluations.forEach((evaluation, index) => {
+                            let qualityClass = 'low-score';
+                            if (evaluation.quality === 'high') qualityClass = 'high-score';
+                            else if (evaluation.quality === 'medium') qualityClass = 'medium-score';
+                            
+                            // Format the similarity scores with percentages
+                            const answerSimilarity = Math.round(evaluation.similarity * 100);
+                            const questionSimilarity = evaluation.question_similarity ? 
+                                Math.round(evaluation.question_similarity * 100) : "N/A";
+                            const combinedScore = evaluation.combined_score ? 
+                                Math.round(evaluation.combined_score * 100) : answerSimilarity;
+                            
+                            resultHtml += `
+                                <div class="accordion-item">
+                                    <button class="accordion-button">
+                                        <span class="quality-indicator ${qualityClass}"></span>
+                                        Q${index + 1}: ${evaluation.question.substring(0, 80)}${evaluation.question.length > 80 ? '...' : ''}
+                                    </button>
+                                    <div class="accordion-content">
+                                        <div class="qa-comparison">
+                                            <div class="qa-item">
+                                                <h4>Question:</h4>
+                                                <p>${evaluation.question}</p>
+                                            </div>
+                                            <div class="qa-item">
+                                                <h4>Student's Answer:</h4>
+                                                <p>${evaluation.student_answer}</p>
+                                            </div>
+                                            <div class="qa-item">
+                                                <h4>Reference Answer:</h4>
+                                                <p>${evaluation.reference_answer}</p>
+                                            </div>
+                                            <div class="qa-item">
+                                                <h4>Quality: <span class="${qualityClass}">${evaluation.quality.toUpperCase()}</span></h4>
+                                                <div class="similarity-metrics">
+                                                    <p><strong>Answer Similarity:</strong> ${answerSimilarity}%</p>
+                                                    <p><strong>Question Similarity:</strong> ${questionSimilarity}%</p>
+                                                    <p><strong>Combined Score:</strong> ${combinedScore}%</p>
+                                                </div>
+                                            </div>
+                                            <div class="qa-item">
+                                                <h4>Feedback:</h4>
+                                                <p>${evaluation.feedback || 'No specific feedback available.'}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        resultHtml += `
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    textResult.innerHTML = resultHtml;
+                    
+                    // Initialize accordion functionality
+                    initializeAccordion();
+                }
+            } catch (error) {
+                textResult.innerHTML = `<div class="error-message"><h3>Error</h3><p>${error.message}</p></div>`;
+            } finally {
+                textLoading.style.display = 'none';
+                textResult.style.display = 'block';
+            }
+        });
+        
+        // Helper function to determine score class
+        function getScoreClass(score) {
+            if (score >= 0.8) return 'high-score';
+            if (score >= 0.6) return 'medium-score';
+            return 'low-score';
+        }
+        
+        // Initialize accordion functionality
+        function initializeAccordion() {
+            const accordionButtons = document.querySelectorAll('.accordion-button');
+            accordionButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    const content = this.nextElementSibling;
+                    if (content.style.maxHeight) {
+                        content.style.maxHeight = null;
+                    } else {
+                        content.style.maxHeight = content.scrollHeight + "px";
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html> 

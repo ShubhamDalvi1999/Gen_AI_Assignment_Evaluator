@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+docs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.txt
+project_scraper.py
+
+# Virtual Environment
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Bat
+*.bat
+# Local development
+.DS_Store
+Thumbs.db 
+
+
+# Markdown
+*.md
+improvement.md
+
+# Zip
+*.zip
+.qodo
+
+
+# test_files
+test_data/
+
+# images
+*.png
+
+# pdf
+*.pdf
+*.docx
+*.doc
+*.txt
+*.csv
+*.json
+*.xml
+
+
+#environment variables
+.env
+
