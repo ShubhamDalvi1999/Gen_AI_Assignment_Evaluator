@@ -30,6 +30,9 @@ class RAGProcessor:
     def store_code_context(self, function_name: str, code: str, embedding: np.ndarray, 
                           metadata: Dict[str, Any] = None) -> None:
         """Store code context with its embedding and metadata."""
+        logger.info("========== CODE CONTEXT STORAGE STAGE ==========")
+        logger.info(f"Storing code context with embedding for function: {function_name}")
+        
         document = {
             "function_name": function_name,
             "code": code,
@@ -38,6 +41,7 @@ class RAGProcessor:
             "timestamp": datetime.now()
         }
         self.collection.insert_one(document)
+        logger.info(f"Successfully stored code context for function: {function_name}")
         
     def retrieve_similar_contexts(self, query_embedding: np.ndarray, 
                                 top_k: int = 3) -> List[Dict[str, Any]]:

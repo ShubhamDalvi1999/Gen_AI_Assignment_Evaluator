@@ -2,11 +2,12 @@ import requests
 import json
 import os
 import sys
+import logging
 from enum import Enum
 from datetime import datetime
 from typing import Dict, Any, List
 import traceback
-import logging
+from utils.logger import feedback_logger as logger
 
 
 # Configure logging first before using logger
@@ -41,7 +42,13 @@ def generate_feedback(student_code: str, ideal_code: str, similarity: float,
     start_time = datetime.now()
     
     try:
+        # RETRIEVAL STAGE
+        logger.info("========== RETRIEVAL STAGE ==========")
+        logger.info(f"Processing {len(similar_contexts)} similar contexts")
+        
         # Format the prompt
+        # AUGMENTATION STAGE
+        logger.info("========== AUGMENTATION STAGE ==========")
         logger.debug("Formatting prompt for feedback generation")
         prompt = f"""
         You are an AI code reviewer evaluating a student's function implementation against an ideal solution. 
@@ -66,7 +73,8 @@ def generate_feedback(student_code: str, ideal_code: str, similarity: float,
         highlighting strengths and areas for improvement.
         """
         
-        # Call Ollama API
+        # GENERATION STAGE
+        logger.info("========== GENERATION STAGE ==========")
         logger.debug(f"Calling Ollama API at {OLLAMA_BASE_URL}")
         api_start = datetime.now()
         response = requests.post(

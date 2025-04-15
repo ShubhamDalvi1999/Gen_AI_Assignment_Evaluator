@@ -4,6 +4,7 @@ import numpy as np
 import requests
 from scipy.spatial.distance import cosine
 from enum import Enum
+from utils.logger import embedding_logger as logger
 import logging
 import json
 from typing import Dict, Any, List, Optional
@@ -66,6 +67,7 @@ SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.8"))
 def get_embedding_ollama(text: str) -> np.ndarray:
     """Generate embedding using Ollama's local model."""
     try:
+        logger.debug(f"Generating Ollama embedding for text of length {len(text)}")
         response = requests.post(
             OLLAMA_API_URL,
             json={"model": "llama3.2:3b", "prompt": text},
@@ -75,7 +77,9 @@ def get_embedding_ollama(text: str) -> np.ndarray:
         result = response.json()
         if "embedding" not in result:
             raise ValueError("No embedding in Ollama response")
-        return np.array(result["embedding"])
+        embedding = np.array(result["embedding"])
+        logger.debug(f"Successfully generated Ollama embedding with dimension {len(embedding)}")
+        return embedding
     except Exception as e:
         logger.error(f"Ollama embedding generation failed: {e}")
         raise ValueError(f"Ollama embedding generation failed: {str(e)}")
@@ -83,9 +87,11 @@ def get_embedding_ollama(text: str) -> np.ndarray:
 def get_embedding_openai(text: str) -> np.ndarray:
     """Generate embedding using OpenAI's API."""
     if not OPENAI_API_KEY:
+        logger.error("OpenAI API key not configured")
         raise ValueError("OpenAI API key not configured")
     
     try:
+        logger.debug(f"Generating OpenAI embedding for text of length {len(text)}")
         response = requests.post(
             OPENAI_API_URL,
             headers={
@@ -99,7 +105,9 @@ def get_embedding_openai(text: str) -> np.ndarray:
             timeout=10
         )
         response.raise_for_status()
-        return np.array(response.json()["data"][0]["embedding"])
+        embedding = np.array(response.json()["data"][0]["embedding"])
+        logger.debug(f"Successfully generated OpenAI embedding with dimension {len(embedding)}")
+        return embedding
     except Exception as e:
         logger.error(f"OpenAI embedding generation failed: {e}")
         raise ValueError(f"OpenAI embedding generation failed: {str(e)}")
@@ -109,6 +117,9 @@ def get_embedding(text: str, model: EmbeddingModel = EmbeddingModel.OLLAMA) -> n
     logger.debug(f"Generating embedding using model: {model}")
     start_time = datetime.now()
     
+    logger.info("========== EMBEDDING GENERATION STAGE ==========")
+    logger.info(f"Generating embedding for text of length {len(text)} using model: {model}")
+    
     try:
         if model == EmbeddingModel.OLLAMA:
             embedding = get_embedding_ollama(text)
@@ -116,6 +127,7 @@ def get_embedding(text: str, model: EmbeddingModel = EmbeddingModel.OLLAMA) -> n
             embedding = get_embedding_openai(text)
         
         elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Embedding generation successful. Vector dimension: {len(embedding)}, Time: {elapsed:.2f}s")
         logger.debug(f"Generated embedding successfully in {elapsed:.2f}s ({len(text)} chars, model: {model})")
         return embedding
     except Exception as e:
@@ -126,7 +138,9 @@ def get_embedding(text: str, model: EmbeddingModel = EmbeddingModel.OLLAMA) -> n
 def compute_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
     """Compute cosine similarity between two embeddings."""
     try:
-        return float(1 - cosine(emb1, emb2))
+        similarity = float(1 - cosine(emb1, emb2))
+        logger.debug(f"Computed similarity: {similarity:.4f}")
+        return similarity
     except Exception as e:
         logger.error(f"Error computing similarity: {e}")
         return 0.0
