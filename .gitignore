@@ -7,7 +7,6 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-docs/
 downloads/
 eggs/
 .eggs/
@@ -45,7 +44,11 @@ Thumbs.db
 
 # Markdown
 *.md
-improvement.md
+!Readme.md
+!docs/DOCX_EVALUATION_flow.md
+!docs/ARCHITECTURE.md
+!docs/PY_EVAL_function_flow.md
+
 
 # Zip
 *.zip
