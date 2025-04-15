@@ -3,8 +3,10 @@ Text-based Retrieval-Augmented Generation (RAG) processor for evaluating Q&A sub
 """
 import os
 import json
+import difflib
 import logging
 import traceback
+from collections import Counter
 import numpy as np
 import requests
 import random
@@ -227,6 +229,9 @@ class TextRAGProcessor:
             question_embedding: The QUESTION embedding (if available)
         """
         try:
+            logger.info("========== DOCUMENT EMBEDDING STORAGE STAGE ==========")
+            logger.info(f"Storing embeddings for QA pair {qa_id} (is_ideal: {is_ideal})")
+            
             # Check if embedding is a numpy array or already a list
             embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else embedding
             
@@ -247,6 +252,7 @@ class TextRAGProcessor:
                 document["question_embedding"] = question_embedding_list
             
             self.qa_embeddings.insert_one(document)
+            logger.info(f"Successfully stored embeddings for QA pair {qa_id}")
             logger.info(f"Stored embeddings for QA pair {qa_id} (with question embedding: {question_embedding is not None})")
         except Exception as e:
             logger.error(f"Error storing embedding for Q&A pair {qa_id}: {e}")
@@ -777,6 +783,7 @@ class TextRAGProcessor:
             logger.info(f"Cleared embedding cache and database for fresh evaluation")
             
             # 2.1 Process ideal document
+            logger.info("========== DOCUMENT PROCESSING STAGE ==========")
             logger.info(f"Processing ideal document: {ideal_path}")
             ideal_qa_pairs = self.process_qa_document(ideal_path, is_ideal=True)
             
@@ -831,6 +838,8 @@ class TextRAGProcessor:
                 logger.warning(f"Question count mismatch: {high_matches + medium_matches + low_matches + poor_matches + missing} vs {total_questions}")
             
             # Calculate overall score (weighted)
+            logger.info("========== SCORING STAGE ==========")
+            logger.info(f"Calculating overall score from {total_questions} questions")
             overall_score = (high_matches * 1.0 + medium_matches * 0.7 + low_matches * 0.4 + poor_matches * 0.1) / total_questions
             overall_score = round(overall_score * 100)
             logger.info(f"Calculated overall score: {overall_score}%")
@@ -929,6 +938,9 @@ class TextRAGProcessor:
     
     def _generate_summary(self, question_evaluations, total_questions, high_count, medium_count, low_count, overall_score) -> str:
         """Generate a summary of the evaluation results."""
+        logger.info("========== SUMMARY GENERATION STAGE ==========")
+        logger.info(f"Generating evaluation summary for {total_questions} questions (Score: {overall_score}%)")
+        
         try:
             prompt = QA_SUMMARY_PROMPT.format(
                 question_evaluations=question_evaluations,
@@ -963,7 +975,13 @@ class TextRAGProcessor:
                 # Safely extract content
                 result = response.json()
                 if "choices" in result and len(result["choices"]) > 0 and "message" in result["choices"][0]:
-                    return result["choices"][0]["message"].get("content", "")
+                    content = result["choices"][0]["message"].get("content", "")
+                    # Wrap the content in HTML for better UI display
+                    return f"""
+<div class="evaluation-summary ai-generated">
+    {content}
+</div>
+"""
                 else:
                     logger.error(f"Unexpected response format from OpenAI: {result}")
                     return "Error generating summary: unexpected response format"
@@ -978,27 +996,42 @@ class TextRAGProcessor:
     
     def _generate_simple_summary(self, total_questions, high_count, medium_count, low_count, overall_score) -> str:
         """Generate a simple summary when AI is not available."""
-        return (
-            f"## Performance Summary\n\n"
-            f"**Overall Score:** {overall_score}%\n\n"
-            f"**Performance Breakdown:**\n"
-            f"- Total Questions: {total_questions}\n"
-            f"- High Quality Answers: {high_count}\n"
-            f"- Medium Quality Answers: {medium_count}\n"
-            f"- Low Quality Answers: {low_count}\n"
-            f"- Poor/Missing Answers: {total_questions - (high_count + medium_count + low_count)}\n\n"
-            f"**Recommendations:**\n"
-            f"1. Review the specific feedback provided for each question\n"
-            f"2. Focus on improving areas marked as 'low' or 'poor' quality\n"
-            f"3. Revisit course materials related to questions you struggled with\n"
-            f"4. Practice formulating more complete answers that address all aspects of each question"
-        )
+        return f"""
+<div class="evaluation-summary">
+    <h2 class="summary-title">Performance Summary</h2>
+    
+    <div class="score-section">
+        <div class="overall-score">
+            <h3>Overall Score</h3>
+            <div class="score-value">{overall_score}%</div>
+        </div>
+        
+        <div class="score-breakdown">
+            <h3>Performance Breakdown</h3>
+            <ul class="stats-list">
+                <li><span class="stat-label">Total Questions:</span> <span class="stat-value">{total_questions}</span></li>
+                <li><span class="stat-label">High Quality Answers:</span> <span class="stat-value">{high_count}</span></li>
+                <li><span class="stat-label">Medium Quality Answers:</span> <span class="stat-value">{medium_count}</span></li>
+                <li><span class="stat-label">Low Quality Answers:</span> <span class="stat-value">{low_count}</span></li>
+                <li><span class="stat-label">Poor/Missing Answers:</span> <span class="stat-value">{total_questions - (high_count + medium_count + low_count)}</span></li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="recommendations-section">
+        <h3>Recommendations</h3>
+        <ol class="recommendation-list">
+            <li>Review the specific feedback provided for each question</li>
+            <li>Focus on improving areas marked as 'low' or 'poor' quality</li>
+            <li>Revisit course materials related to questions you struggled with</li>
+            <li>Practice formulating more complete answers that address all aspects of each question</li>
+        </ol>
+    </div>
+</div>
+"""
     
     def _generate_answer_feedback(self, student_answer: str, reference_answer: str, quality: str) -> str:
-        """
-        Generate detailed feedback for a student answer based on similarity to reference answer.
-        
-        Args:
+        """Generate feedback for a student answer compared to reference answer.Args:
             student_answer: The student's submitted answer
             reference_answer: The reference/ideal answer
             quality: Quality level (high, medium, low, poor)
@@ -1006,8 +1039,10 @@ class TextRAGProcessor:
         Returns:
             Detailed feedback with specific insights on the student's answer
         """
-        import time
-        start_time = time.time()
+        logger.info("========== GENERATION STAGE ==========")
+        logger.info(f"Generating {quality.lower()} quality feedback using {'OpenAI' if self.use_openai else 'local'} API")
+        
+        start_time = datetime.now()
         
         try:
             # Truncate very long answers to avoid token limits
@@ -1080,9 +1115,9 @@ class TextRAGProcessor:
                 feedback = self._get_default_feedback(quality)
             
             # Log performance
-            end_time = time.time()
-            processing_time = end_time - start_time
-            logger.info(f"Generated {quality} quality feedback in {processing_time:.2f}s")
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            logger.info(f"Generated {quality.lower()} quality feedback in {processing_time:.2f}s")
             
             # Add a default message if feedback generation fails or returns empty
             if not feedback or len(feedback) < 10:
@@ -1110,9 +1145,7 @@ class TextRAGProcessor:
     
     # 3. Maps student submission Q&A pairs to the most similar ideal Q&A pairs using two-phase matching
     def _map_qa_pairs(self, submission_qa_pairs: Dict[str, Dict[str, Any]], emphasize_embedding=True) -> List[Dict[str, Any]]:
-        """
-        Map submission Q&A pairs to the most similar ideal Q&A pairs.
-        
+        """Map submission Q&A pairs to ideal Q&A pairs using embeddings. 
         This method performs a two-phase matching:
         1. First it matches questions based on similarity to find the right pairing
         2. Then it assesses answer quality using detailed comparison metrics
@@ -1124,6 +1157,10 @@ class TextRAGProcessor:
         Returns:
             List of mappings between submission and ideal Q&A pairs
         """
+        logger.info("========== RETRIEVAL STAGE ==========")
+        logger.info(f"Mapping submission QA pairs to ideal QA pairs")
+        
+       
         
         # 3.1 Retrieve ideal Q&A pairs from MongoDB and student submission are passed as a parameter
         # 3.2 Check for missing question embeddings in ideal Q&A pairs and generate them if needed
@@ -1134,17 +1171,28 @@ class TextRAGProcessor:
         # 3.7 Create the mapping
         
         ideal_qa_pairs = self.retrieve_ideal_embeddings()
+        logger.info(f"Retrieved {len(ideal_qa_pairs)} ideal Q&A pairs from MongoDB ({sum(1 for qa in ideal_qa_pairs.values() if 'question_embedding' in qa)} with question embeddings)")
         
         if not ideal_qa_pairs:
             logger.error("No ideal Q&A pairs found in the database")
             return []
         
+        # Map student submissions to ideal answers
         logger.info(f"Mapping {len(submission_qa_pairs)} submissions to {len(ideal_qa_pairs)} ideal Q&A pairs")
+        
+        # Decide whether to emphasize embedding similarity for this evaluation
         if emphasize_embedding:
             logger.info("Using embedding-focused similarity for answer scoring")
-        
-        # Initialize mappings list
+            
+        # Prepare for mapping
         mappings = []
+        
+        # Initialize collections for tracking best matches
+        mapped_submission_ids = set()
+        mapped_ideal_ids = set()
+        
+        logger.info("========== QUESTION MAPPING STAGE ==========")
+        logger.info("Finding best matches between student and ideal questions")
         
         # Track which ideal questions have been matched to avoid duplicates
         matched_ideal_ids = set()
@@ -1382,19 +1430,10 @@ class TextRAGProcessor:
         Returns:
             Dict containing similarity metrics, key concepts, and quality assessment
         """
-        # 3.3.1 Normalize text (lower case, remove extra whitespace)
-        # 3.3.2 Calculate semantic similarity using embeddings (cosine similarity)
-        # 3.3.3 Calculate text similarity using SequenceMatcher (difflib)
-        # 3.3.4 Calculate token overlap (Jaccard similarity on words)
-        # 3.3.5 Calculate term match score
-        # 3.3.6 Calculate combined similarity with weighted contributions
+        logger.info("========== AUGMENTATION STAGE ==========")
+        logger.info(f"Comparing answers using multiple similarity methods (emphasize_embedding={emphasize_embedding})")
         
-        # Start timer for performance monitoring
-        start_time = time.time()
-        
-        import difflib
-        from collections import Counter
-        import re
+        start_time = datetime.now()
         
         # Initialize results
         result = {
@@ -1405,7 +1444,20 @@ class TextRAGProcessor:
         }
         
         try:
+            # Import needed modules locally to ensure they're available in this method
+            import difflib
+            from collections import Counter
+            import re
+            
+            # Rest of method continues as normal...
+            
             # 3.3.1 Normalize text (lower case, remove extra whitespace)
+            # 3.3.2 Calculate semantic similarity using embeddings (cosine similarity)
+            # 3.3.3 Calculate text similarity using SequenceMatcher (difflib)
+            # 3.3.4 Calculate token overlap (Jaccard similarity on words)
+            # 3.3.5 Calculate term match score
+            # 3.3.6 Calculate combined similarity with weighted contributions
+            
             def normalize_text(text):
                 text = text.lower()
                 text = re.sub(r'\s+', ' ', text).strip()
@@ -1433,7 +1485,7 @@ class TextRAGProcessor:
             if emphasize_embedding:
                 result["combined_similarity"] = result["embedding_similarity"]
                 result["quality"] = self._determine_quality(result["combined_similarity"])
-                result["calculation_time"] = time.time() - start_time
+                result["calculation_time"] = (datetime.now() - start_time).total_seconds()
                 return result
             
             # 3.3.4 Calculate text similarity using SequenceMatcher
@@ -1505,7 +1557,7 @@ class TextRAGProcessor:
             
             # Add quality assessment to result
             result["quality"] = self._determine_quality(result["combined_similarity"])
-            result["calculation_time"] = time.time() - start_time
+            result["calculation_time"] = (datetime.now() - start_time).total_seconds()
             
             # Debugging - log comparison details occasionally
             if random.random() < 0.1:  # Log ~10% of comparisons
@@ -1514,10 +1566,18 @@ class TextRAGProcessor:
                             f"token={result['token_overlap']:.4f}, " +
                             f"combined={result['combined_similarity']:.4f}")
             
+            # Log performance for monitoring
+            elapsed_time = (datetime.now() - start_time).total_seconds()
+            logger.debug(f"Answer comparison completed in {elapsed_time:.2f}s")
+            
             return result
             
         except Exception as e:
             logger.error(f"Error in answer comparison: {e}")
+            logger.error(traceback.format_exc())
+            
+            # On error, return initial empty result with error flag
+            result["error"] = str(e)
             return result
     
     def _determine_quality(self, combined_similarity):
@@ -1578,6 +1638,9 @@ class TextRAGProcessor:
         Returns:
             Dictionary with evaluation results
         """
+        logger.info("========== EVALUATION STAGE ==========")
+        logger.info(f"Evaluating {len(mappings)} answer mappings")
+        
         if not mappings:
             logger.warning("No mappings to evaluate")
             return {

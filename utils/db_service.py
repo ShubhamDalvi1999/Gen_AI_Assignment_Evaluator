@@ -6,11 +6,10 @@ import json
 import os
 import sys
 import traceback
-import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
-import traceback
+from utils.logger import db_logger as logger
 from utils.embedding_service import compute_similarity
 
 
@@ -117,17 +116,24 @@ def store_embedding(func_name: str, code: str, embedding: np.ndarray) -> None:
     """Store embedding in MongoDB."""
     try:
         if mongo_client is not None and embeddings_collection is not None:
-            embeddings_collection.insert_one({
+            logger.info("========== EMBEDDING STORAGE STAGE ==========")
+            logger.info(f"Storing embedding for function: {func_name} (vector dimension: {len(embedding)})")
+            
+            logger.debug(f"Storing embedding for function: {func_name}")
+            document = {
                 "function_name": func_name,
                 "code": code,
                 "embedding": embedding.tolist(),
                 "timestamp": datetime.now()
-            })
-            logger.debug(f"Embedding stored for function: {func_name}")
+            }
+            result = embeddings_collection.insert_one(document)
+            logger.info(f"Successfully stored embedding for function: {func_name} (ID: {result.inserted_id})")
+            logger.debug(f"Embedding stored for function: {func_name} (ID: {result.inserted_id})")
         else:
             logger.warning(f"Embedding not stored for function {func_name} - MongoDB connection unavailable")
     except Exception as e:
         logger.error(f"Error storing embedding: {e}")
+        logger.error(traceback.format_exc())
 
 def retrieve_similar_contexts(query_embedding: np.ndarray, top_k: int = 9) -> List[Dict[str, Any]]:
     """Retrieve similar code contexts based on embedding similarity."""
@@ -180,3 +186,10 @@ def retrieve_similar_contexts(query_embedding: np.ndarray, top_k: int = 9) -> Li
         logger.error(f"Error retrieving similar contexts after {elapsed:.2f}s: {e}")
         logger.error(traceback.format_exc())
         return []
+
+def set_db_client(client, collection):
+    """Set the MongoDB client and collection for this module."""
+    global mongo_client, embeddings_collection
+    mongo_client = client
+    embeddings_collection = collection
+    logger.info("Database client and collection set for db_service module")

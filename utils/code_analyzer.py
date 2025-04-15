@@ -11,6 +11,8 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
+import traceback
+from utils.logger import code_analyzer_logger as logger
 
 # Configure logging first before using logger
 logging.basicConfig(
@@ -70,11 +72,14 @@ SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.8"))
 def extract_functions_from_file(file_path: str) -> Dict[str, str]:
     """Extract function definitions from a Python file."""
     try:
+        logger.debug(f"Extracting functions from file: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as file:
             code = file.read()
         tree = ast.parse(code)
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-        return {func.name: ast.get_source_segment(code, func) for func in functions}
+        result = {func.name: ast.get_source_segment(code, func) for func in functions}
+        logger.debug(f"Extracted {len(result)} functions from {file_path}")
+        return result
     except Exception as e:
         logger.warning(f"Error processing file {file_path}: {e}")
         return {}
@@ -219,6 +224,7 @@ def analyze_code_structure(student_code: str, ideal_code: str) -> Dict[str, Any]
     except Exception as e:
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.error(f"Error analyzing code structure after {elapsed:.2f}s: {e}")
+        logger.error(traceback.format_exc())
         return {
             "variables": {"missing_variables": [], "extra_variables": []},
             "control_flow": {"missing_control_structures": [], "extra_control_structures": []},
@@ -227,6 +233,7 @@ def analyze_code_structure(student_code: str, ideal_code: str) -> Dict[str, Any]
 
 def generate_recommendations(structure_analysis: Dict[str, Any]) -> List[str]:
     """Generate recommendations based on structure analysis."""
+    logger.debug("Generating recommendations from structure analysis")
     recommendations = []
     
     # Variable recommendations
@@ -251,4 +258,5 @@ def generate_recommendations(structure_analysis: Dict[str, Any]) -> List[str]:
     if not recommendations:
         recommendations.append("Your implementation looks good structurally!")
     
+    logger.debug(f"Generated {len(recommendations)} recommendations")
     return recommendations
