@@ -4,6 +4,8 @@ An advanced tool for evaluating student assignments using AI techniques. This ap
 
 ![image](https://github.com/user-attachments/assets/9e84b4a5-e83e-41dc-8f7c-05b35650ee9d)
 
+![image](https://github.com/user-attachments/assets/7f32cc37-5cee-444a-8001-d12cf399e9b2)
+
 
 ## Features
 
