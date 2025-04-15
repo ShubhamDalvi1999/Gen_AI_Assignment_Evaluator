@@ -2,6 +2,9 @@
 
 An advanced tool for evaluating student assignments using AI techniques. This application leverages Retrieval Augmented Generation (RAG) to provide high-quality feedback on both code submissions and text-based Q&A responses.
 
+![image](https://github.com/user-attachments/assets/9e84b4a5-e83e-41dc-8f7c-05b35650ee9d)
+
+
 ## Features
 
 - **Code Evaluation**: Compare student code against ideal solutions with structure analysis and similarity scoring
