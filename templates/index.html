@@ -100,7 +100,74 @@
                 <p>Processing your submission...</p>
             </div>
             
-            <div id="result"></div>
+            <div id="result" style="display: none;">
+                <h2>Evaluation Results</h2>
+                
+                <!-- Progress Stepper -->
+                <div class="progress-stepper">
+                    <div class="stepper-step" data-step="embedding">
+                        <div class="step-circle">
+                            <span class="step-number">1</span>
+                        </div>
+                        <div class="step-title">Generating Embeddings</div>
+                    </div>
+                    <div class="stepper-step" data-step="mapping">
+                        <div class="step-circle">
+                            <span class="step-number">2</span>
+                        </div>
+                        <div class="step-title">Mapping Questions</div>
+                    </div>
+                    <div class="stepper-step" data-step="scoring">
+                        <div class="step-circle">
+                            <span class="step-number">3</span>
+                        </div>
+                        <div class="step-title">Calculating Scores</div>
+                    </div>
+                    <div class="stepper-step" data-step="feedback">
+                        <div class="step-circle">
+                            <span class="step-number">4</span>
+                        </div>
+                        <div class="step-title">Generating Feedback</div>
+                    </div>
+                </div>
+                
+                <!-- Skeleton Loaders -->
+                <div class="skeleton-loader score-skeleton">
+                    <div class="skeleton-line" style="width: 60%;"></div>
+                    <div class="skeleton-line" style="width: 40%;"></div>
+                </div>
+                
+                <div class="skeleton-loader questions-skeleton">
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                    <div class="skeleton-line" style="width: 80%;"></div>
+                    <div class="skeleton-line" style="width: 90%;"></div>
+                </div>
+                
+                <div class="skeleton-loader summary-skeleton">
+                    <div class="skeleton-line" style="width: 70%;"></div>
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                </div>
+                
+                <!-- Score Section -->
+                <div id="scoreSection" class="result-section" style="display: none;">
+                    <h3>Overall Score</h3>
+                    <div class="score-display">
+                        <span id="overallScore">0.00</span>
+                    </div>
+                </div>
+                
+                <!-- Questions Section -->
+                <div id="questionsSection" class="result-section" style="display: none;">
+                    <h3>Question Details</h3>
+                    <div id="questionsList"></div>
+                </div>
+                
+                <!-- Summary Section -->
+                <div id="summarySection" class="result-section" style="display: none;">
+                    <h3>Summary Feedback</h3>
+                    <p id="summaryFeedback"></p>
+                </div>
+            </div>
         </div>
         
         <!-- Text Q&A Evaluation Tab -->
@@ -141,7 +208,56 @@
                 <p>Evaluating answers... This may take a few moments.</p>
             </div>
             
-            <div id="textResult" class="results-container"></div>
+            <div id="textResult" style="display: none;">
+                <!-- Progress Stepper -->
+                <div class="progress-stepper text-stepper">
+                    <div class="stepper-step" data-step="embedding">
+                        <div class="step-circle"><span class="step-number">1</span></div>
+                        <div class="step-title">Generating Embeddings</div>
+                    </div>
+                    <div class="stepper-step" data-step="mapping">
+                        <div class="step-circle"><span class="step-number">2</span></div>
+                        <div class="step-title">Mapping Questions</div>
+                    </div>
+                    <div class="stepper-step" data-step="scoring">
+                        <div class="step-circle"><span class="step-number">3</span></div>
+                        <div class="step-title">Calculating Scores</div>
+                    </div>
+                    <div class="stepper-step" data-step="feedback">
+                        <div class="step-circle"><span class="step-number">4</span></div>
+                        <div class="step-title">Generating Feedback</div>
+                    </div>
+                </div>
+
+                <!-- Skeleton loaders -->
+                <div class="skeleton-loader text-score-skeleton">
+                    <div class="skeleton-line" style="width: 120px; height:120px; margin:0 auto"></div>
+                </div>
+                <div class="skeleton-loader text-questions-skeleton">
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                    <div class="skeleton-line" style="width: 100%;"></div>
+                </div>
+                <div class="skeleton-loader text-summary-skeleton">
+                    <div class="skeleton-line" style="width: 70%;"></div>
+                </div>
+
+                <!-- Result Sections -->
+                <div id="textScoreSection" class="result-section" style="display:none">
+                    <h3>Overall Score</h3>
+                    <div class="score-display"><span id="textOverallScore">0</span>%</div>
+                </div>
+
+                <div id="textQuestionsSection" class="result-section" style="display:none">
+                    <h3>Question Details</h3>
+                    <div id="textQuestionsList"></div>
+                </div>
+
+                <div id="textSummarySection" class="result-section" style="display:none">
+                    <h3>Summary Feedback</h3>
+                    <div id="textSummaryContent"></div>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -328,152 +444,8 @@
             });
         });
         
-        // Text evaluation form submission
-        document.getElementById('textForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const submission = document.getElementById('textSubmission').files[0];
-            const ideal = document.getElementById('textIdeal').files[0];
-            const model = document.getElementById('textModel').value;
-            
-            if (!submission || !ideal) {
-                alert('Please select both student submission and ideal answer files.');
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('submission', submission);
-            formData.append('ideal', ideal);
-            formData.append('model', model);
-            
-            const textLoading = document.getElementById('textLoading');
-            const textResult = document.getElementById('textResult');
-            
-            textLoading.style.display = 'flex';
-            textResult.style.display = 'none';
-            
-            try {
-                const response = await fetch('/evaluate-text', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'error') {
-                    textResult.innerHTML = `<div class="error-message"><h3>Error</h3><p>${data.message}</p></div>`;
-                } else {
-                    // Format the evaluation ID if available
-                    const evaluationId = data.evaluation_id ? 
-                        `<div class="evaluation-id">Evaluation ID: ${data.evaluation_id}</div>` : '';
-                    
-                    let resultHtml = `
-                        <h2>Text Q&A Evaluation Results</h2>
-                        ${evaluationId}
-                        <div class="score-container">
-                            <div class="score-circle ${getScoreClass(data.stats.overall_score/100)}">
-                                ${data.stats.overall_score}%
-                            </div>
-                            <p>Overall Score</p>
-                        </div>
-                        
-                        <div class="stats-container">
-                            <div class="stat-item">
-                                <div class="stat-value high-score">${data.stats.high_count}</div>
-                                <p>High Quality</p>
-                            </div>
-                            <div class="stat-item">
-                                <div class="stat-value medium-score">${data.stats.medium_count}</div>
-                                <p>Medium Quality</p>
-                            </div>
-                            <div class="stat-item">
-                                <div class="stat-value low-score">${data.stats.low_count}</div>
-                                <p>Low Quality</p>
-                            </div>
-                        </div>
-                        
-                        <div class="summary-section">
-                            <h3>Summary Feedback</h3>
-                            <div class="summary-content">${data.summary.replace(/\n/g, '<br>')}</div>
-                        </div>
-                    `;
-                    
-                    // Add individual Q&A evaluations if available
-                    if (data.evaluations && data.evaluations.length > 0) {
-                        resultHtml += `
-                            <div class="qa-evaluations">
-                                <h3>Individual Question Evaluations</h3>
-                                <div class="accordion">
-                        `;
-                        
-                        data.evaluations.forEach((evaluation, index) => {
-                            let qualityClass = 'low-score';
-                            if (evaluation.quality === 'high') qualityClass = 'high-score';
-                            else if (evaluation.quality === 'medium') qualityClass = 'medium-score';
-                            
-                            // Format the similarity scores with percentages
-                            const answerSimilarity = Math.round(evaluation.similarity * 100);
-                            const questionSimilarity = evaluation.question_similarity ? 
-                                Math.round(evaluation.question_similarity * 100) : "N/A";
-                            const combinedScore = evaluation.combined_score ? 
-                                Math.round(evaluation.combined_score * 100) : answerSimilarity;
-                            
-                            resultHtml += `
-                                <div class="accordion-item">
-                                    <button class="accordion-button">
-                                        <span class="quality-indicator ${qualityClass}"></span>
-                                        Q${index + 1}: ${evaluation.question.substring(0, 80)}${evaluation.question.length > 80 ? '...' : ''}
-                                    </button>
-                                    <div class="accordion-content">
-                                        <div class="qa-comparison">
-                                            <div class="qa-item">
-                                                <h4>Question:</h4>
-                                                <p>${evaluation.question}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Student's Answer:</h4>
-                                                <p>${evaluation.student_answer}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Reference Answer:</h4>
-                                                <p>${evaluation.reference_answer}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Quality: <span class="${qualityClass}">${evaluation.quality.toUpperCase()}</span></h4>
-                                                <div class="similarity-metrics">
-                                                    <p><strong>Answer Similarity:</strong> ${answerSimilarity}%</p>
-                                                    <p><strong>Question Similarity:</strong> ${questionSimilarity}%</p>
-                                                    <p><strong>Combined Score:</strong> ${combinedScore}%</p>
-                                                </div>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Feedback:</h4>
-                                                <p>${evaluation.feedback || 'No specific feedback available.'}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        
-                        resultHtml += `
-                                </div>
-                            </div>
-                        `;
-                    }
-                    
-                    textResult.innerHTML = resultHtml;
-                    
-                    // Initialize accordion functionality
-                    initializeAccordion();
-                }
-            } catch (error) {
-                textResult.innerHTML = `<div class="error-message"><h3>Error</h3><p>${error.message}</p></div>`;
-            } finally {
-                textLoading.style.display = 'none';
-                textResult.style.display = 'block';
-            }
-        });
+        // Text evaluation form is now handled in main.js with streaming updates
+        // No inline handler needed here
         
         // Helper function to determine score class
         function getScoreClass(score) {

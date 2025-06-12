@@ -10,6 +10,90 @@ function toggleDetails(button) {
     }
 }
 
+// Progress stepper management
+const STEPS = ['embedding', 'mapping', 'scoring', 'feedback'];
+
+function updateStepperProgress(currentStep, error = null) {
+    const steps = document.querySelectorAll('.stepper-step');
+    
+    steps.forEach((step, index) => {
+        const stepName = step.dataset.step;
+        const circle = step.querySelector('.step-circle');
+        const currentStepIndex = STEPS.indexOf(currentStep);
+        
+        // Remove any existing content
+        circle.innerHTML = '';
+        step.classList.remove('completed', 'active', 'error', 'blocked');
+        
+        // Remove any existing error message
+        const existingError = step.querySelector('.step-error');
+        if (existingError) {
+            existingError.remove();
+        }
+        
+        if (error && stepName === currentStep) {
+            // Error state
+            step.classList.add('error');
+            circle.innerHTML = '<span>✕</span>';
+            
+            // Add error message
+            const errorMsg = document.createElement('div');
+            errorMsg.className = 'step-error';
+            errorMsg.textContent = error;
+            step.appendChild(errorMsg);
+            
+            // Mark subsequent steps as blocked
+            const subsequentSteps = Array.from(steps).slice(index + 1);
+            subsequentSteps.forEach(subsequentStep => {
+                subsequentStep.classList.add('blocked');
+                const subsequentCircle = subsequentStep.querySelector('.step-circle');
+                subsequentCircle.innerHTML = '<span>✕</span>';
+            });
+        } else if (STEPS.indexOf(stepName) < currentStepIndex) {
+            // Completed state
+            step.classList.add('completed');
+            circle.innerHTML = '<span>✓</span>';
+        } else if (stepName === currentStep) {
+            // Active state
+            step.classList.add('active');
+            circle.innerHTML = '<div class="step-spinner"></div>';
+        } else if (!error) {
+            // Upcoming state
+            circle.innerHTML = `<span class="step-number">${index + 1}</span>`;
+        }
+    });
+}
+
+function showSection(sectionId, content = null) {
+    const section = document.getElementById(sectionId);
+    const contentDiv = section.querySelector('.qa-content, .summary-content') || section;
+    const skeleton = section.querySelector('.qa-skeleton, .summary-skeleton, .score-skeleton');
+    
+    // Show the section first
+    section.style.display = 'block';
+    
+    if (content) {
+        // If we have content, show it with animation
+        if (contentDiv) {
+            contentDiv.innerHTML = content;
+            contentDiv.classList.add('slide-down');
+        }
+        
+        // Hide the skeleton loader
+        if (skeleton) {
+            skeleton.style.display = 'none';
+        }
+    } else {
+        // If no content yet, show the skeleton loader
+        if (contentDiv) {
+            contentDiv.innerHTML = '';
+        }
+        if (skeleton) {
+            skeleton.style.display = 'block';
+        }
+    }
+}
+
 // Initialize the form when the document is loaded
 document.addEventListener('DOMContentLoaded', function() {
     const uploadForm = document.getElementById('uploadForm');
@@ -58,8 +142,14 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('model', model);
             formData.append('use_openai_feedback', useOpenAIFeedback);
             
-            loading.style.display = 'flex';
-            result.style.display = 'none';
+            // Show the result container and initialize progress
+            result.style.display = 'block';
+            updateStepperProgress('embedding');
+            
+            // Show skeleton loaders for all sections
+            showSection('score-section');
+            showSection('qa-evaluations-section');
+            showSection('summary-section');
             
             try {
                 const response = await fetch('/evaluate', {
@@ -68,436 +158,70 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
                 
                 const data = await response.json();
-                console.log("API Response:", data); // Log the full response
+                console.log("API Response:", data);
                 
                 if (handleMongoDBErrors(data)) {
+                    updateStepperProgress('embedding', 'Database connection error');
                     return;
                 }
                 
-                if (data.status === 'error') {
-                    result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${data.message}</p></div>`;
-                } else if (data.error) {
-                    result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${data.error}</p></div>`;
-                } else {
-                    // Log the data for debugging
-                    console.log("Data received from server:", data);
+                if (data.status === 'error' || data.error) {
+                    const errorMessage = data.message || data.error;
+                    updateStepperProgress('embedding', errorMessage);
+                    result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${errorMessage}</p></div>`;
+                    return;
+                }
+                
+                // Process each stage
+                try {
+                    // Embedding stage
+                    updateStepperProgress('mapping');
                     
-                    // Calculate overall score first as it's used in multiple places
-                    const overallScore = data.overall_score ? parseFloat(data.overall_score.replace('%', '')) / 100 : 0;
+                    // Mapping stage
+                    if (data.qa_pairs) {
+                        updateStepperProgress('scoring');
                     
-                    // Check if we have valid response data
-                    console.log("Processing response data structure:", {
-                        hasReport: !!data.report,
-                        reportType: data.report ? typeof data.report : "N/A",
-                        hasOverallScore: !!data.overall_score,
-                        hasSimilarityScore: !!data.similarity_score
-                    });
-                    
-                    console.log("Calculated overallScore:", overallScore);
-                    
-                    // Create the results HTML
-                    let resultHtml = `
-                        <h2>Evaluation Results</h2>
-                        <div class="score-container">
+                        // Scoring stage - Show the score first
+                        if (data.overall_score) {
+                            const overallScore = parseFloat(data.overall_score.replace('%', '')) / 100;
+                            const scoreHtml = `
                             <div class="score-circle ${getScoreClass(overallScore)}">
                                 ${Math.round(overallScore * 100)}%
                             </div>
                             <p>Similarity Score</p>
-                        </div>
-                    `;
-                    
-                    // Add function reports section if available
-                    if (data.report && typeof data.report === 'object') {
-                        console.log("Processing report object with keys:", Object.keys(data.report));
+                            `;
+                            showSection('score-section', scoreHtml);
+                        }
                         
-                        resultHtml += `
-                            <div class="function-reports">
-                                <h3>Function Analysis</h3>
-                                <div class="accordion">
-                        `;
-                        
-                        // For each function in the report
-                        try {
-                            for (const funcName in data.report) {
-                                if (!data.report.hasOwnProperty(funcName)) continue;
-                                
-                                const funcData = data.report[funcName];
-                                console.log(`Processing function: ${funcName}`, funcData);
-                                
-                                if (!funcData) {
-                                    console.log(`Skipping ${funcName}: funcData is null or undefined`);
-                                    continue;
+                        // Show individual evaluations
+                        if (data.qa_evaluations) {
+                            updateStepperProgress('feedback');
+                            const qaHtml = generateQAEvaluationsHtml(data.qa_evaluations);
+                            showSection('qa-evaluations-section', qaHtml);
                                 }
                                 
-                                const status = funcData.status || 'Unknown';
-                                const similarity = funcData.similarity || 0;
-                                const statusClass = status === 'Correct' ? 'status-match' : 
-                                                  (status === 'Missing' ? 'status-missing' : 'status-mismatch');
-                                
-                                resultHtml += `
-                                    <div class="accordion-item">
-                                        <button class="accordion-button">
-                                            <span class="function-status ${statusClass}"></span>
-                                            ${funcName}: ${status} (${Math.round(similarity * 100)}% similar)
-                                        </button>
-                                        <div class="accordion-content">
-                                            <div class="function-details">
-                                `;
-                                
-                                // Add structure analysis if available
-                                if (funcData.structure_analysis && typeof funcData.structure_analysis === 'object') {
-                                    const structAnalysis = funcData.structure_analysis;
-                                    console.log(`Processing structure analysis for ${funcName}:`, structAnalysis);
-                                    
-                                    // Extra safety check for variables, control_flow, and function_calls sections
-                                    const hasVariables = structAnalysis.variables && typeof structAnalysis.variables === 'object';
-                                    const hasControlFlow = structAnalysis.control_flow && typeof structAnalysis.control_flow === 'object';
-                                    const hasFunctionCalls = structAnalysis.function_calls && typeof structAnalysis.function_calls === 'object';
-                                    
-                                    if (hasVariables || hasControlFlow || hasFunctionCalls) {
-                                        resultHtml += `
-                                            <div class="structure-analysis">
-                                                <h4>Structure Analysis</h4>
-                                                <table>
-                                                    <thead>
-                                                        <tr>
-                                                            <th>Category</th>
-                                                            <th>Missing</th>
-                                                            <th>Extra</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                        `;
-                                        
-                                        // Variables
-                                        if (hasVariables) {
-                                            const missing = Array.isArray(structAnalysis.variables.missing_variables) ? 
-                                                          structAnalysis.variables.missing_variables : [];
-                                            const extra = Array.isArray(structAnalysis.variables.extra_variables) ? 
-                                                        structAnalysis.variables.extra_variables : [];
-                                            
-                                            resultHtml += `
-                                                <tr>
-                                                    <td>Variables</td>
-                                                    <td>${missing.length > 0 ? missing.join(', ') : 'None'}</td>
-                                                    <td>${extra.length > 0 ? extra.join(', ') : 'None'}</td>
-                                                </tr>
-                                            `;
-                                        }
-                                        
-                                        // Control flow
-                                        if (hasControlFlow) {
-                                            const missing = Array.isArray(structAnalysis.control_flow.missing_control_structures) ? 
-                                                          structAnalysis.control_flow.missing_control_structures : [];
-                                            const extra = Array.isArray(structAnalysis.control_flow.extra_control_structures) ? 
-                                                        structAnalysis.control_flow.extra_control_structures : [];
-                                            
-                                            resultHtml += `
-                                                <tr>
-                                                    <td>Control Flow</td>
-                                                    <td>${missing.length > 0 ? missing.join(', ') : 'None'}</td>
-                                                    <td>${extra.length > 0 ? extra.join(', ') : 'None'}</td>
-                                                </tr>
-                                            `;
-                                        }
-                                        
-                                        // Function calls
-                                        if (hasFunctionCalls) {
-                                            const missing = Array.isArray(structAnalysis.function_calls.missing_calls) ? 
-                                                          structAnalysis.function_calls.missing_calls : [];
-                                            const extra = Array.isArray(structAnalysis.function_calls.extra_calls) ? 
-                                                        structAnalysis.function_calls.extra_calls : [];
-                                            
-                                            resultHtml += `
-                                                <tr>
-                                                    <td>Function Calls</td>
-                                                    <td>${missing.length > 0 ? missing.join(', ') : 'None'}</td>
-                                                    <td>${extra.length > 0 ? extra.join(', ') : 'None'}</td>
-                                                </tr>
-                                            `;
-                                        }
-                                        
-                                        resultHtml += `
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        `;
-                                    } else {
-                                        console.log(`No valid structure analysis sections found for ${funcName}`);
-                                    }
-                                }
-                                
-                                // Add recommendations if available
-                                if (funcData.recommendations && Array.isArray(funcData.recommendations)) {
-                                    resultHtml += `
-                                        <div class="recommendations">
-                                            <h4>Recommendations</h4>
-                                            <ul>
-                                                ${funcData.recommendations.map(rec => `<li>${rec}</li>`).join('')}
-                                            </ul>
-                                        </div>
-                                    `;
-                                }
-                                
-                                // Add feedback if available
-                                if (funcData.feedback) {
-                                    resultHtml += `
-                                        <div class="feedback">
-                                            <h4>Feedback</h4>
-                                            <div class="feedback-content">${formatFeedback(funcData.feedback)}</div>
-                                        </div>
-                                    `;
-                                }
-                                
-                                resultHtml += `
-                                            </div>
-                                        </div>
-                                    </div>
-                                `;
-                            }
+                        // Finally, show the summary feedback
+                        if (data.summary_feedback) {
+                            const summaryHtml = `<div class="summary-content">${data.summary_feedback}</div>`;
+                            showSection('summary-section', summaryHtml);
+                            updateStepperProgress('feedback');
                             
-                            resultHtml += `
-                                    </div>
-                                </div>
-                            `;
-                        } catch (error) {
-                            console.error("Error processing function reports:", error);
-                            resultHtml += `
-                                <div class="error-message"><h3>Error</h3><p>${error.message}</p></div>
-                            `;
-                        }
-                    } else {
-                        // Legacy structure analysis display (for backward compatibility)
-                        if (data.structure_analysis && typeof data.structure_analysis === 'object') {
-                            console.log("Processing legacy structure analysis");
-                            resultHtml += `
-                        <div class="structure-analysis">
-                            <h3>Structure Analysis</h3>
-                            <table>
-                                <thead>
-                                    <tr>
-                                                <th>Category</th>
-                                                <th>Expected</th>
-                                                <th>Found</th>
-                                                <th>Missing</th>
-                                                <th>Extra</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                    `;
-                    
-                            // Safely get structure analysis data
-                            try {
-                                const structureCategories = data.structure_analysis ? Object.keys(data.structure_analysis) : [];
-                                console.log("Structure categories:", structureCategories);
-
-                                if (structureCategories.length > 0) {
-                                    for (const category of structureCategories) {
-                                        if (!data.structure_analysis[category] || typeof data.structure_analysis[category] !== 'object') {
-                                            console.log(`Skipping invalid category: ${category}`);
-                                            continue;
-                                        }
-
-                                        const categoryData = data.structure_analysis[category];
-                                        const expected = Array.isArray(categoryData.expected) ? categoryData.expected.length : 0;
-                                        const found = Array.isArray(categoryData.found) ? categoryData.found.length : 0;
-                                        const missing = Array.isArray(categoryData.missing) ? categoryData.missing : [];
-                                        const extra = Array.isArray(categoryData.extra) ? categoryData.extra : [];
-
-                                        resultHtml += `
-                                            <tr>
-                                                <td>${category}</td>
-                                                <td>${expected}</td>
-                                                <td>${found}</td>
-                                                <td>${missing.length > 0 ? missing.join(', ') : 'None'}</td>
-                                                <td>${extra.length > 0 ? extra.join(', ') : 'None'}</td>
-                                            </tr>
-                                        `;
-                                    }
-                                } else {
-                                    resultHtml += `
-                                        <tr>
-                                            <td colspan="5">No structure analysis data available</td>
-                                        </tr>
-                                    `;
-                                }
-                            } catch (error) {
-                                console.error("Error processing structure analysis:", error);
-                        resultHtml += `
-                            <tr>
-                                        <td colspan="5">Error processing structure analysis: ${error.message}</td>
-                            </tr>
-                        `;
-                    }
-                    
-                    resultHtml += `
-                                </tbody>
-                            </table>
-                        </div>
-                            `;
-                        }
-                        
-                        // Legacy recommendations display (for backward compatibility)
-                        if (data.recommendations) {
-                            resultHtml += `
-                        <div class="feedback-section">
-                            <h3>Feedback</h3>
-                            <div class="feedback-content">${formatFeedback(data.recommendations)}</div>
-                        </div>
-                    `;
+                            // Mark process as complete
+                            setTimeout(() => {
+                                const feedbackStep = document.querySelector('.stepper-step[data-step="feedback"]');
+                                feedbackStep.classList.remove('active');
+                                feedbackStep.classList.add('completed');
+                                feedbackStep.querySelector('.step-circle').innerHTML = '<span>✓</span>';
+                            }, 500);
                         }
                     }
-                    
-                    // Add similar functions section if present
-                    if (data.similar_contexts && Array.isArray(data.similar_contexts) && data.similar_contexts.length > 0) {
-                        resultHtml += `
-                            <div class="similar-functions">
-                                <h3>Similar Functions</h3>
-                                <div class="accordion">
-                        `;
-                        
-                        data.similar_contexts.forEach((context, index) => {
-                            if (!context) return; // Skip if context is null or undefined
-                            const functionName = context.function_name || 'Unknown';
-                            const similarity = context.similarity || 0;
-                            const code = context.code || 'No code available';
-                            
-                            resultHtml += `
-                                <div class="accordion-item">
-                                    <button class="accordion-button">${functionName} (${Math.round(similarity * 100)}% similar)</button>
-                                    <div class="accordion-content">
-                                        <pre><code>${code}</code></pre>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        
-                        resultHtml += `
-                                </div>
-                            </div>
-                        `;
-                    }
-                    
-                    // Add key concepts section if available
-                    if (data.key_concepts && typeof data.key_concepts === 'object') {
-                        console.log("Processing key concepts");
-                        try {
-                            resultHtml += `
-                                <div class="key-concepts">
-                                    <h3>Key Concepts</h3>
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Concept</th>
-                                                <th>Present</th>
-                                                <th>Context</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                            `;
-
-                            // Safely iterate through key concepts
-                            for (const concept in data.key_concepts) {
-                                if (!data.key_concepts.hasOwnProperty(concept)) continue;
-                                
-                                const conceptData = data.key_concepts[concept];
-                                if (!conceptData || typeof conceptData !== 'object') {
-                                    console.log(`Skipping invalid concept: ${concept}`);
-                                    continue;
-                                }
-                                
-                                const present = conceptData.present === true;
-                                const context = conceptData.context || 'N/A';
-                                
-                                resultHtml += `
-                                    <tr>
-                                        <td>${concept}</td>
-                                        <td>${present ? '✓' : '✗'}</td>
-                                        <td>${context}</td>
-                                    </tr>
-                                `;
-                            }
-
-                            resultHtml += `
-                                        </tbody>
-                                    </table>
-                                </div>
-                            `;
-                        } catch (error) {
-                            console.error("Error processing key concepts:", error);
-                            resultHtml += `
-                                <div class="error-message">
-                                    <h3>Error Processing Key Concepts</h3>
-                                    <p>${error.message}</p>
-                                </div>
-                            `;
-                        }
-                    }
-                    
-                    // Add the detailed feedback
-                    if (data.feedback && typeof data.feedback === 'string') {
-                        resultHtml += `
-                            <div class="detailed-feedback">
-                                <h3>Detailed Feedback</h3>
-                                <div class="feedback-content">${data.feedback}</div>
-                            </div>
-                        `;
-                    }
-                    
-                    // Add the summary at the end
-                    try {
-                        // Log complete data for debugging summary issues
-                        console.log("Creating summary with data:", {
-                            total_functions: data.total_functions,
-                            matched_functions: data.matched_functions,
-                            function_stats: data.function_stats,
-                            report_length: data.report ? Object.keys(data.report).length : 0,
-                            model_info: data.model_used || data.model || 'Unknown model'
-                        });
-                        
-                        // Extract function stats properly
-                        let totalFunctions = 0;
-                        let matchedFunctions = 0;
-                        
-                        // Try to get values from different possible locations in the response
-                        if (data.total_functions !== undefined) {
-                            totalFunctions = data.total_functions;
-                        } else if (data.function_stats && data.function_stats.total !== undefined) {
-                            totalFunctions = data.function_stats.total;
-                        } else if (data.report) {
-                            totalFunctions = Object.keys(data.report).length;
-                        }
-                        
-                        if (data.matched_functions !== undefined) {
-                            matchedFunctions = data.matched_functions;
-                        } else if (data.function_stats && data.function_stats.matched !== undefined) {
-                            matchedFunctions = data.function_stats.matched;
-                        }
-                        
-                        const modelInfo = data.model_used || data.model || 'Unknown model';
-                        
-                        resultHtml += `
-                            <div class="summary-section">
-                                <h3>Summary</h3>
-                                <p>Functions: ${matchedFunctions}/${totalFunctions} matched</p>
-                                <p>Overall Score: ${Math.round(overallScore * 100)}%</p>
-                                <p>Evaluated using: ${modelInfo}</p>
-                            </div>
-                        `;
                     } catch (error) {
-                        console.error("Error creating summary section:", error);
-                    }
-                    
-                    result.innerHTML = resultHtml;
-                    
-                    // Initialize accordion functionality
-                    initializeAccordion();
+                    console.error('Error processing evaluation stages:', error);
+                    updateStepperProgress(currentStep, 'Error processing results');
                 }
             } catch (error) {
-                result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${error.message}</p></div>`;
-            } finally {
-                loading.style.display = 'none';
-                result.style.display = 'block';
+                console.error('Error submitting evaluation:', error);
+                updateStepperProgress('embedding', 'Network error occurred');
             }
         });
     }
@@ -508,150 +232,116 @@ document.addEventListener('DOMContentLoaded', function() {
             
             const submission = document.getElementById('textSubmission').files[0];
             const ideal = document.getElementById('textIdeal').files[0];
-            const useOpenAI = document.getElementById('use_openai').checked;
+            const model = document.getElementById('textModel').value;
             
             if (!submission || !ideal) {
                 alert('Please select both student submission and ideal answer files.');
                 return;
             }
             
+            // Prepare form data
             const formData = new FormData();
             formData.append('submission', submission);
             formData.append('ideal', ideal);
-            formData.append('use_openai', useOpenAI);
+            formData.append('model', model);
             
-            loading.style.display = 'flex';
-            result.style.display = 'none';
+            // Show textResult container and reset stepper
+            const textResult = document.getElementById('textResult');
+            textResult.style.display = 'block';
+            updateStepperProgress('embedding');
+            
+            // Show skeletons
+            document.querySelector('.text-score-skeleton').style.display = 'block';
+            document.querySelector('.text-questions-skeleton').style.display = 'block';
+            document.querySelector('.text-summary-skeleton').style.display = 'block';
+            
+            // Hide real sections initially
+            document.getElementById('textScoreSection').style.display = 'none';
+            document.getElementById('textQuestionsSection').style.display = 'none';
+            document.getElementById('textSummarySection').style.display = 'none';
             
             try {
                 const response = await fetch('/evaluate-text', {
                     method: 'POST',
                     body: formData
                 });
+                if (!response.ok) throw new Error('Network response was not ok');
                 
-                const data = await response.json();
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
                 
-                if (handleMongoDBErrors(data)) {
-                    return;
-                }
-                
-                if (data.status === 'error') {
-                    result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${data.message}</p></div>`;
-                } else {
-                    let resultHtml = `
-                        <h2>Text Q&A Evaluation Results</h2>
-                        <div class="score-container">
-                            <div class="score-circle ${getScoreClass(getOverallScore(data) / 100)}">
-                                ${getOverallScore(data)}%
-                            </div>
-                            <p>Overall Score</p>
-                        </div>
-                        
-                        <div class="stats-container">
-                            <div class="stat-item">
-                                <div class="stat-value high-score">${data.stats.high_count}</div>
-                                <p>High Quality</p>
-                            </div>
-                            <div class="stat-item">
-                                <div class="stat-value medium-score">${data.stats.medium_count}</div>
-                                <p>Medium Quality</p>
-                            </div>
-                            <div class="stat-item">
-                                <div class="stat-value low-score">${data.stats.low_count}</div>
-                                <p>Low Quality</p>
-                            </div>
-                        </div>
-                        
-                        <div class="summary-section">
-                            <h3>Summary Feedback</h3>
-                            <div class="summary-content">
-                                ${data.summary ? formatFeedback(data.summary) : 'No summary available.'}
-                            </div>
-                        </div>
-                    `;
-                    
-                    // Add individual Q&A evaluations if available
-                    if (data.evaluations && data.evaluations.length > 0) {
-                        resultHtml += `
-                            <div class="qa-evaluations">
-                                <h3>Individual Question Evaluations</h3>
-                                <div class="accordion">
-                        `;
-                        
-                        data.evaluations.forEach((evaluation, index) => {
-                            let qualityClass = 'low-score';
-                            if (evaluation.quality === 'high') qualityClass = 'high-score';
-                            else if (evaluation.quality === 'medium') qualityClass = 'medium-score';
-                            
-                            resultHtml += `
-                                <div class="accordion-item">
-                                    <button class="accordion-button">
-                                        <span class="quality-indicator ${qualityClass}"></span>
-                                        Q${index + 1}: ${evaluation.question.substring(0, 80)}${evaluation.question.length > 80 ? '...' : ''}
-                                    </button>
-                                    <div class="accordion-content">
-                                        <div class="qa-comparison">
-                                            <div class="qa-item">
-                                                <h4>Question:</h4>
-                                                <p>${evaluation.question}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Student's Answer:</h4>
-                                                <p>${evaluation.student_answer}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Reference Answer:</h4>
-                                                <p>${evaluation.reference_answer}</p>
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Quality: <span class="${qualityClass}">${evaluation.quality.toUpperCase()}</span></h4>
-                                                <p>Similarity: ${Math.round(evaluation.similarity * 100)}%</p>
-                                                ${evaluation.numerical_score ? `<p class="numerical-score">Numerical Score: ${evaluation.numerical_score}/100</p>` : ''}
-                                            </div>
-                                            <div class="qa-item">
-                                                <h4>Feedback:</h4>
-                                                <p>${formatFeedback(evaluation.feedback)}</p>
-                                            </div>
-                                            ${evaluation.key_concepts_present && evaluation.key_concepts_present.length > 0 ? `
-                                            <div class="qa-item">
-                                                <h4>Key Concepts Present:</h4>
-                                                <ul class="key-concepts-present">
-                                                    ${evaluation.key_concepts_present.map(concept => `<li>${concept}</li>`).join('')}
-                                                </ul>
-                                            </div>
-                                            ` : ''}
-                                            ${evaluation.key_concepts_missing && evaluation.key_concepts_missing.length > 0 ? `
-                                            <div class="qa-item">
-                                                <h4>Key Concepts Missing:</h4>
-                                                <ul class="key-concepts-missing">
-                                                    ${evaluation.key_concepts_missing.map(concept => `<li>${concept}</li>`).join('')}
-                                                </ul>
-                                            </div>
-                                            ` : ''}
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        
-                        resultHtml += `
-                                </div>
-                            </div>
-                        `;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    let lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete line
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        let obj;
+                        try {
+                            const cleaned = line.trim();
+                            if (!cleaned) continue;
+                            obj = JSON.parse(cleaned);
+                        } catch (err) {
+                            console.error('JSON parse error', err, line);
+                            continue;
+                        }
+                        handleTextStageUpdate(obj);
                     }
-                    
-                    result.innerHTML = resultHtml;
-                    
-                    // Initialize accordion functionality
-                    initializeAccordion();
                 }
-            } catch (error) {
-                result.innerHTML = `<div class="error-message"><h3>Error</h3><p>${error.message}</p></div>`;
-            } finally {
-                loading.style.display = 'none';
-                result.style.display = 'block';
+            } catch (err) {
+                console.error('Streaming error', err);
+                updateStepperProgress('embedding', err.message || 'Stream error');
             }
         });
+    }
+    
+    function handleTextStageUpdate(update) {
+        const stage = update.stage;
+        const status = update.status;
+        if (status === 'working') {
+            updateStepperProgress(stage);
+            return;
+        }
+        if (status === 'error') {
+            updateStepperProgress(stage, update.message || 'Error');
+            return;
+        }
+        if (status === 'success') {
+            // Move to next stage unless this is feedback (final)
+            if (stage === 'embedding') updateStepperProgress('mapping');
+            else if (stage === 'mapping') updateStepperProgress('scoring');
+            else if (stage === 'scoring') updateStepperProgress('feedback');
+            else if (stage === 'feedback') {
+                // Received final data
+                const data = update.data || {};
+                if (data.overall_score !== undefined) {
+                    const score = parseInt(data.overall_score);
+                    document.getElementById('textOverallScore').textContent = score;
+                    document.querySelector('.text-score-skeleton').style.display = 'none';
+                    document.getElementById('textScoreSection').style.display = 'block';
+                }
+                if (data.evaluations && Array.isArray(data.evaluations)) {
+                    const listDiv = document.getElementById('textQuestionsList');
+                    listDiv.innerHTML = generateQAEvaluationsHtml(data.evaluations);
+                    document.querySelector('.text-questions-skeleton').style.display = 'none';
+                    document.getElementById('textQuestionsSection').style.display = 'block';
+                    initializeAccordion();
+                }
+                if (data.summary) {
+                    document.getElementById('textSummaryContent').innerHTML = formatFeedback(data.summary);
+                    document.querySelector('.text-summary-skeleton').style.display = 'none';
+                    document.getElementById('textSummarySection').style.display = 'block';
+                }
+                // Mark feedback step complete
+                const feedbackStep = document.querySelector('.stepper-step[data-step="feedback"]');
+                feedbackStep.classList.remove('active');
+                feedbackStep.classList.add('completed');
+                feedbackStep.querySelector('.step-circle').innerHTML = '<span>✓</span>';
+            }
+        }
     }
     
     // Helper functions
@@ -720,5 +410,153 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // If neither exists, return 0
         return 0;
+    }
+
+    // Helper function to generate QA evaluations HTML
+    function generateQAEvaluationsHtml(evaluations) {
+        let html = '<div class="qa-content">';
+        for (const evaluation of evaluations) {
+            html += `
+                <div class="qa-item">
+                    <h4>Question ${evaluation.question_number}</h4>
+                    <div class="similarity-metrics">
+                        <p><strong>Similarity Score:</strong> ${Math.round(evaluation.similarity * 100)}%</p>
+                        <p><strong>Quality:</strong> ${evaluation.quality}</p>
+                    </div>
+                    <div class="feedback-content">
+                        ${evaluation.feedback}
+                    </div>
+                </div>
+            `;
+        }
+        html += '</div>';
+        return html;
+    }
+}); 
+
+document.getElementById('evaluationForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const submissionFile = document.getElementById('submission').files[0];
+    const idealFile = document.getElementById('ideal').files[0];
+    
+    if (!submissionFile || !idealFile) {
+        alert('Please select both submission and ideal solution files.');
+        return;
+    }
+    
+    // Show result section and reset progress
+    document.getElementById('result').style.display = 'block';
+    updateStepperProgress('embedding');
+    
+    // Show skeleton loaders
+    document.querySelectorAll('.skeleton-loader').forEach(loader => {
+        loader.style.display = 'block';
+    });
+    
+    // Hide previous results
+    document.getElementById('scoreSection').style.display = 'none';
+    document.getElementById('questionsSection').style.display = 'none';
+    document.getElementById('summarySection').style.display = 'none';
+    
+    const formData = new FormData();
+    formData.append('submission', submissionFile);
+    formData.append('ideal', idealFile);
+    
+    try {
+        const response = await fetch('/evaluate', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'error') {
+            // Show error in the stepper
+            updateStepperProgress(result.stage, result.message);
+            return;
+        }
+        
+        // Update progress through stages
+        updateStepperProgress('mapping');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        updateStepperProgress('scoring');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        updateStepperProgress('feedback');
+        
+        // Fade out skeleton loaders and show content sections with animation
+        const fadeOutDuration = 300;
+        const slideInDuration = 500;
+        
+        // Show score section
+        document.querySelectorAll('.skeleton-loader').forEach(loader => {
+            loader.style.opacity = 0;
+            setTimeout(() => loader.style.display = 'none', fadeOutDuration);
+        });
+        
+        // Animate in the score section
+        const scoreSection = document.getElementById('scoreSection');
+        scoreSection.style.display = 'block';
+        scoreSection.style.opacity = 0;
+        scoreSection.style.transform = 'translateY(20px)';
+        
+        setTimeout(() => {
+            scoreSection.style.transition = `all ${slideInDuration}ms ease-out`;
+            scoreSection.style.opacity = 1;
+            scoreSection.style.transform = 'translateY(0)';
+            
+            // Update score content
+            document.getElementById('overallScore').textContent = result.data.overall_score.toFixed(2);
+            
+            // Show questions section after score animation
+            setTimeout(() => {
+                const questionsSection = document.getElementById('questionsSection');
+                questionsSection.style.display = 'block';
+                questionsSection.style.opacity = 0;
+                questionsSection.style.transform = 'translateY(20px)';
+                
+                // Populate questions
+                const questionsContainer = document.getElementById('questionsList');
+                questionsContainer.innerHTML = '';
+                
+                result.data.question_scores.forEach((score, index) => {
+                    const questionDiv = document.createElement('div');
+                    questionDiv.className = 'question-item';
+                    questionDiv.innerHTML = `
+                        <h4>Question ${index + 1}</h4>
+                        <p>Score: ${score.score.toFixed(2)}</p>
+                        <p>Feedback: ${score.feedback}</p>
+                    `;
+                    questionsContainer.appendChild(questionDiv);
+                });
+                
+                setTimeout(() => {
+                    questionsSection.style.transition = `all ${slideInDuration}ms ease-out`;
+                    questionsSection.style.opacity = 1;
+                    questionsSection.style.transform = 'translateY(0)';
+                    
+                    // Show summary section after questions animation
+                    setTimeout(() => {
+                        const summarySection = document.getElementById('summarySection');
+                        summarySection.style.display = 'block';
+                        summarySection.style.opacity = 0;
+                        summarySection.style.transform = 'translateY(20px)';
+                        
+                        // Update summary content
+                        document.getElementById('summaryFeedback').textContent = result.data.summary_feedback;
+                        
+                        setTimeout(() => {
+                            summarySection.style.transition = `all ${slideInDuration}ms ease-out`;
+                            summarySection.style.opacity = 1;
+                            summarySection.style.transform = 'translateY(0)';
+                        }, 50);
+                    }, slideInDuration);
+                }, 50);
+            }, slideInDuration);
+        }, fadeOutDuration);
+        
+    } catch (error) {
+        console.error('Error:', error);
+        updateStepperProgress('scoring', 'An unexpected error occurred. Please try again.');
     }
 }); 

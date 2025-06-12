@@ -484,4 +484,209 @@ tr:hover {
     .stat-value {
         margin: 0;
     }
+}
+
+/* Progress Stepper */
+.progress-stepper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    padding: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.stepper-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    flex: 1;
+}
+
+.stepper-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 24px;
+    left: 50%;
+    width: 100%;
+    height: 2px;
+    background-color: #ddd;
+    z-index: 1;
+}
+
+.stepper-step.completed:not(:last-child)::after {
+    background-color: #2ecc71;
+}
+
+.step-circle {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background-color: #ddd;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 20px;
+    color: #fff;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 2;
+}
+
+.step-circle.active {
+    background-color: #2ecc71;
+}
+
+.step-circle.completed {
+    background-color: #2ecc71;
+}
+
+.step-circle.error {
+    background-color: #e74c3c;
+}
+
+.step-circle.blocked {
+    background-color: #95a5a6;
+}
+
+.step-title {
+    font-size: 14px;
+    color: #666;
+    text-align: center;
+}
+
+.step-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid #fff;
+    border-top: 3px solid transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+/* Skeleton Loaders */
+.skeleton-loader {
+    padding: 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.skeleton-line {
+    height: 20px;
+    margin: 10px 0;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s infinite;
+    border-radius: 4px;
+}
+
+@keyframes loading {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* Result Sections */
+.result-section {
+    padding: 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.score-display {
+    text-align: center;
+    font-size: 48px;
+    font-weight: bold;
+    color: #2ecc71;
+    margin: 20px 0;
+}
+
+.question-item {
+    padding: 15px;
+    margin-bottom: 15px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+}
+
+.question-item h4 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+/* Animations */
+.result-section {
+    transition: opacity 300ms ease-out, transform 500ms ease-out;
+}
+
+/* Step Icons */
+.step-circle {
+    position: relative;
+    z-index: 2;
+}
+
+.step-circle .step-number {
+    color: #666;
+}
+
+.stepper-step.active .step-circle {
+    background-color: #2ecc71;
+}
+
+.stepper-step.active .step-number {
+    color: #fff;
+}
+
+.stepper-step.completed .step-circle {
+    background-color: #2ecc71;
+}
+
+.stepper-step.completed .step-circle::after {
+    content: '✓';
+    color: #fff;
+}
+
+.stepper-step.error .step-circle {
+    background-color: #e74c3c;
+}
+
+.stepper-step.error .step-circle::after {
+    content: '✕';
+    color: #fff;
+}
+
+.step-error {
+    color: #e74c3c;
+    font-size: 12px;
+    margin-top: 5px;
+    text-align: center;
+    max-width: 150px;
+}
+
+/* Spinner Animation */
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #fff;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
 } 

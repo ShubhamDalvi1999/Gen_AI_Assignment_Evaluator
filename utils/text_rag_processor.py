@@ -57,37 +57,30 @@ class TextRAGProcessor:
         # Connect to MongoDB
         self.mongodb_client = None
         self.qa_embeddings = None
+        self.student_submissions = None  # New collection for student submissions
+        self.counters = None  # Collection for tracking counters
         self.connect_mongodb(mongodb_uri, db_name)
         
-        # Cache for ideal Q&A pairs
-        self.ideal_qa_pairs = {}
+        # Set up local file storage for Q&A pairs
+        self.qa_files_dir = os.path.join(os.getcwd(), "qa_files")
+        self.setup_qa_directories()
         
-        # Set similarity thresholds - adjusted to account for higher embedding weights
-        # With higher embedding weights, answers with good semantic similarity will score higher
-        self.high_quality_threshold = 0.85  # High quality threshold reduced from 0.92
-        self.medium_quality_threshold = 0.75  # Medium quality threshold reduced from 0.80
-        self.low_quality_threshold = 0.60  # Low quality threshold reduced from 0.65
+        # Define similarity thresholds
+        self.question_similarity_threshold = 0.7  # Threshold for matching questions
+        self.high_quality_threshold = 0.92  # Threshold for high quality matches
+        self.medium_quality_threshold = 0.75  # Threshold for medium quality matches
+        self.low_quality_threshold = 0.60  # Threshold for low quality matches
         
-        # For backward compatibility
-        self.similarity_thresholds = {
-            "high": self.high_quality_threshold,
-            "medium": self.medium_quality_threshold,
-            "low": self.low_quality_threshold
-        }
-        
-        # Add simplified threshold naming for easier code readability
-        self.sim_threshold_high = self.high_quality_threshold
-        self.sim_threshold_medium = self.medium_quality_threshold
-        self.sim_threshold_low = self.low_quality_threshold
-        
-        # API keys and model settings
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.ollama_api_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-        
-        # Use OpenAI or Ollama for embeddings
+        # Set up embedding service based on configuration
         self.use_openai = use_openai
-        logger.info(f"Initialized TextRAGProcessor with {'OpenAI' if use_openai else 'Ollama'} for embeddings")
+        
+        # Get OpenAI API key for embedding generation
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        # If OpenAI is enabled but no API key is available, log a warning
+        if self.use_openai and not self.openai_api_key:
+            logger.warning("OpenAI embeddings requested but no API key provided - falling back to Ollama")
+            self.use_openai = False
         
         # Initialize embedding models at startup
         self._initialize_embedding_models()
@@ -217,7 +210,8 @@ class TextRAGProcessor:
 
     # Stores Q&A pair with embeddings in MongoDB for later retrieval and comparison
     def store_qa_embedding(self, qa_id: str, question: str, answer: str, 
-                          embedding: np.ndarray, is_ideal: bool = True, question_embedding: np.ndarray = None) -> None:
+                          embedding: np.ndarray, is_ideal: bool = True, question_embedding: np.ndarray = None,
+                          submission_id: int = None) -> None:
         """Store Q&A embedding in MongoDB.
         
         Args:
@@ -227,35 +221,71 @@ class TextRAGProcessor:
             embedding: The ANSWER embedding
             is_ideal: Whether this is from the ideal document
             question_embedding: The QUESTION embedding (if available)
+            submission_id: The submission ID for student submissions (only used when is_ideal=False)
         """
         try:
             logger.info("========== DOCUMENT EMBEDDING STORAGE STAGE ==========")
-            logger.info(f"Storing embeddings for QA pair {qa_id} (is_ideal: {is_ideal})")
             
-            # Check if embedding is a numpy array or already a list
+            # Convert numpy arrays to lists for MongoDB storage
             embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else embedding
             
-            # Prepare document
-            document = {
-                "qa_id": qa_id,
-                "question": question,
-                "answer": answer,
-                "embedding": embedding_list,  # This is the ANSWER embedding
-                "embedding_type": "answer",  # Explicitly mark this as an answer embedding
-                "is_ideal": is_ideal,
-                "timestamp": datetime.now()
-            }
-            
-            # Add question embedding if provided
             if question_embedding is not None:
                 question_embedding_list = question_embedding.tolist() if hasattr(question_embedding, 'tolist') else question_embedding
-                document["question_embedding"] = question_embedding_list
+            else:
+                question_embedding_list = None
             
-            self.qa_embeddings.insert_one(document)
-            logger.info(f"Successfully stored embeddings for QA pair {qa_id}")
-            logger.info(f"Stored embeddings for QA pair {qa_id} (with question embedding: {question_embedding is not None})")
+            # Store in the appropriate collection based on type
+            if is_ideal:
+                # Store ideal Q&A pair in qa_embeddings collection
+                # Use qa_id as the MongoDB document _id for ideal answers
+                document = {
+                                        "_id": qa_id,  # Use qa_id directly as the document ID
+                    "qa_id": qa_id,
+                    "question": question,
+                    "answer": answer,
+                                        "embedding": embedding_list,
+                                        "question_embedding": question_embedding_list,
+                                        "is_ideal": True,
+                    "timestamp": datetime.now()
+                }
+            
+                # Insert or update in MongoDB
+                self.qa_embeddings.replace_one(
+                        {"_id": qa_id},
+                        document,
+                        upsert=True
+                )
+                
+                logger.info(f"Stored ideal Q&A pair in MongoDB: {qa_id}")
+            else:
+                # Store student submission in student_submissions collection
+                # For student submissions, create a compound ID using both submission_id and qa_id
+                compound_id = f"{submission_id}_{qa_id}"
+                
+                document = {
+                    "_id": compound_id,  # Use compound ID to avoid duplicates
+                    "qa_id": qa_id,
+                    "submission_id": submission_id,
+                    "question": question,
+                    "answer": answer,
+                    "embedding": embedding_list,
+                    "question_embedding": question_embedding_list,
+                    "is_ideal": False,
+                    "timestamp": datetime.now()
+                }
+                
+                # Insert or update in MongoDB
+                self.student_submissions.replace_one(
+                    {"_id": compound_id},
+                    document,
+                    upsert=True
+                )
+                
+                logger.info(f"Stored student Q&A pair in MongoDB: {qa_id} (submission_id: {submission_id})")
+        
         except Exception as e:
-            logger.error(f"Error storing embedding for Q&A pair {qa_id}: {e}")
+            logger.error(f"Error storing Q&A embedding: {e}")
+            logger.error(traceback.format_exc())
     
     # Clears all embedding records from MongoDB to reset the system
     def clear_embeddings(self) -> None:
@@ -264,38 +294,16 @@ class TextRAGProcessor:
     
 
     # Calculates cosine similarity between two embeddings for comparing text semantic similarity
-    def compute_similarity(self, emb1, emb2) -> float:
-        """
-        Compute cosine similarity between two embeddings.
-        Handles both numpy arrays and lists.
-        """
-        import numpy as np
-        
-        # Convert to numpy arrays if they're lists
-        if isinstance(emb1, list):
-            emb1 = np.array(emb1)
-        if isinstance(emb2, list):
-            emb2 = np.array(emb2)
-        
-        # Ensure we're working with 1D arrays
-        if len(emb1.shape) > 1:
-            emb1 = emb1.flatten()
-        if len(emb2.shape) > 1:
-            emb2 = emb2.flatten()
-        
-        # Compute cosine similarity
-        similarity = float(1 - cosine(emb1, emb2))
-        
-        # Ensure the result is a python float
-        return float(similarity)
+
     
     # 2. Processes a DOCX file to extract Q&A pairs and store embeddings.
-    def process_qa_document(self, file_path: str, is_ideal: bool = True) -> Dict[str, Dict[str, Any]]:
+    def process_qa_document(self, file_path: str, is_ideal: bool = True, submission_id: int = None) -> Dict[str, Dict[str, Any]]:
         """Process a DOCX file to extract Q&A pairs and store embeddings.
          
         Args:
             file_path: The path to the DOCX file
             is_ideal: Whether this is from the ideal document
+            submission_id: The submission ID for student submissions (only used when is_ideal=False)
             
         Returns:
             Dictionary of question-answer pairs
@@ -307,99 +315,112 @@ class TextRAGProcessor:
             logger.error(f"No text extracted from {file_path}")
             return {}
         
-        # 2.2.1 Extract Q&A pairs using regex
+        # 2.2. Extract Q&A pairs from text
         qa_pairs = DocxProcessor.extract_qa_pairs(text)
         
-        # 2.2.2 If no Q&A pairs found, try with LLM-based extraction
         if not qa_pairs:
-            logger.info(f"No Q&A pairs found with regex, trying LLM extraction for {file_path}")
-            qa_pairs = self.extract_qa_pairs_with_llm(text)
+            logger.warning(f"No Q&A pairs found in document: {file_path}")
+            return {}
+            
+        # 2.3. Normalize and deduplicate
+        processed_qa = {}
         
-        # 2.3. Process each Q&A pair for embeddings
-        qa_count = len(qa_pairs)
-        logger.info(f"Extracted {qa_count} Q&A pairs from document")
-        
-        # Log which model we're using for embeddings
-        if self.use_openai:
-            logger.info(f"Using OpenAI for generating embeddings for {qa_count} Q&A pairs")
+        if is_ideal:
+            # Ideal document processing
+            logger.info(f"Processing ideal document with {len(qa_pairs)} Q&A pairs")
+            id_prefix = "ideal"
         else:
-            logger.info(f"Using Ollama for generating embeddings for {qa_count} Q&A pairs")
+            # Student submission processing
+            logger.info(f"Processing student submission with {len(qa_pairs)} Q&A pairs")
+            if submission_id is None:
+                # Generate a submission ID if not provided
+                submission_id = self.generate_submission_id()
+            id_prefix = f"student_{submission_id}"
         
-        # Clear cache if OpenAI is selected to ensure fresh embeddings for each evaluation
-        if self.use_openai:
-            global _QUESTION_EMBEDDING_CACHE
-            # We only clear OpenAI cache entries
-            openai_keys = [k for k in _QUESTION_EMBEDDING_CACHE.keys() if k.startswith('openai_embed_')]
-            for key in openai_keys:
-                del _QUESTION_EMBEDDING_CACHE[key]
-            logger.info(f"Cleared {len(openai_keys)} OpenAI embedding cache entries for fresh evaluation")
+        # Process each Q&A pair
+        # Check if qa_pairs is a dictionary of dictionaries or a list of tuples
+        if isinstance(qa_pairs, dict):
+            # It's a dictionary with nested Q&A dictionaries
+            qa_items = qa_pairs.items()
+        elif isinstance(qa_pairs, list):
+            # It's a list of tuples (index, qa_dict)
+            qa_items = enumerate(qa_pairs)
+        else:
+            logger.error(f"Unexpected qa_pairs format: {type(qa_pairs)}")
+            return {}
         
-        # 2.4. Process each Q&A pair for embeddings and store embeddings in MongoDB
-        for qa_id, qa_pair in qa_pairs.items():
-            question = qa_pair.get("question", "")
-            answer = qa_pair.get("answer", "")
+        for i, qa_data in qa_items:
+            if isinstance(qa_data, dict):
+                # Direct access to question and answer
+                question = qa_data.get("question", "")
+                answer = qa_data.get("answer", "")
+            else:
+                # For enumerated list items, qa_data is the actual QA dict
+                question = qa_data.get("question", "")
+                answer = qa_data.get("answer", "")
+            
+            # Generate unique ID for the QA pair
+            new_qa_id = f"{i+1}" if isinstance(i, int) else f"{i}"
+            qa_id_with_prefix = f"{id_prefix}_{new_qa_id}"
             
             # Skip if question or answer is empty
-            if not question or not answer:
-                logger.warning(f"Skipping {qa_id} due to empty question or answer")
+            if not question.strip() or not answer.strip():
+                logger.warning(f"Skipping empty Q&A pair: {qa_id_with_prefix}")
                 continue
             
+            # Process and store the embeddings
             try:
-                # d.1Generate embeddings for the Q&A pair
-
                 # Generate embeddings for the answer
-                if self.use_openai:
-                    # Use bypass_cache=True to force a new API call every time for accurate scoring
-                    answer_embedding = self.generate_embedding_openai(answer, bypass_cache=True)
-                    logger.info(f"Generated new OpenAI embedding via API call for ANSWER in {qa_id}")
-                else:
-                    answer_embedding = self.generate_embedding(answer)
-                    logger.debug(f"Generated Ollama embedding for ANSWER in {qa_id}")
-                
-                # Generate embeddings for the question
-                if self.use_openai:
-                    question_embedding = self.generate_embedding_openai(question, bypass_cache=True)
-                    logger.info(f"Generated new OpenAI embedding via API call for QUESTION in {qa_id}")
-                else:
-                    question_embedding = self.generate_embedding(question)
-                    logger.debug(f"Generated Ollama embedding for QUESTION in {qa_id}")
-                
-                # Check if we got valid embeddings
-                if answer_embedding is None or (isinstance(answer_embedding, np.ndarray) and answer_embedding.size == 0):
-                    logger.warning(f"Invalid answer embedding generated for {qa_id} - skipping")
-                    continue
-                    
-                if question_embedding is None or (isinstance(question_embedding, np.ndarray) and question_embedding.size == 0):
-                    logger.warning(f"Invalid question embedding generated for {qa_id} - skipping")
-                    continue
-                    
-                # d.2 Store Q&A pair with embeddings only if it's an ideal Q&A pair
-                if is_ideal:  # Only store ideal embeddings in DB
-                    # Store both the answer and question embeddings in MongoDB
-                    self.store_qa_embedding(
-                        qa_id, 
-                        question, 
-                        answer, 
-                        answer_embedding, 
-                        is_ideal=True,
-                        question_embedding=question_embedding
-                    )
-                    logger.info(f"Stored embeddings for ideal Q&A pair {qa_id}")
-                
-                # Add embeddings to the qa_pair for return
-                answer_embedding_list = answer_embedding.tolist() if hasattr(answer_embedding, 'tolist') else answer_embedding
-                question_embedding_list = question_embedding.tolist() if hasattr(question_embedding, 'tolist') else question_embedding
-                
-                # Store both ways for backward compatibility during transition
-                qa_pairs[qa_id]["answer_embedding"] = answer_embedding_list
-                qa_pairs[qa_id]["embedding"] = answer_embedding_list  # Keep old field for backward compatibility
-                qa_pairs[qa_id]["question_embedding"] = question_embedding_list
-                
+                answer_embedding = self.generate_embedding(answer)
+            
+                # Generate embeddings for the question (cached to avoid duplicate work)
+                question_embedding = self.generate_embedding(question)
+            
+                # Store in MongoDB with the appropriate submission_id
+                self.store_qa_embedding(
+                    new_qa_id, question, answer, answer_embedding, 
+                    is_ideal=is_ideal, 
+                    question_embedding=question_embedding,
+                    submission_id=None if is_ideal else submission_id
+                )
+            
+                # Store in the results dictionary
+                processed_qa[qa_id_with_prefix] = {
+                    "question": question,
+                    "answer": answer,
+                    "embedding": answer_embedding,
+                    "question_embedding": question_embedding
+                }
+            
+                # Log the Q&A pair (first 100 chars only)
+                q_preview = question[:100] + "..." if len(question) > 100 else question
+                a_preview = answer[:100] + "..." if len(answer) > 100 else answer
+            
+                # Convert i to string before concatenation to avoid type errors
+                index_str = str(i) if isinstance(i, str) else str(i+1)
+                logger.info(f"  [{index_str}] Question: {q_preview}")
+                logger.info(f"      Answer: {a_preview}")
             except Exception as e:
-                logger.error(f"Error processing embedding for Q&A pair {qa_id}: {e}")
-                qa_pairs[qa_id]["embedding_error"] = str(e)
+                logger.error(f"Error processing Q&A pair {qa_id_with_prefix}: {e}")
+                logger.error(traceback.format_exc())
         
-        return qa_pairs
+        # Save Q&A pairs to a local JSON file
+        filename = os.path.basename(file_path)
+        base_name = os.path.splitext(filename)[0]
+        
+        # Create qa_files directory if it doesn't exist
+        qa_files_dir = os.path.join(os.getcwd(), "qa_files")
+        
+        if is_ideal:
+            # Save ideal Q&A pairs
+            json_path = os.path.join(qa_files_dir, "ideal", f"{base_name}.json")
+            self.save_qa_pairs_to_json(processed_qa, json_path)
+        else:
+            # Save student Q&A pairs with submission ID
+            json_path = os.path.join(qa_files_dir, "student", f"{base_name}_submission_{submission_id}.json")
+            self.save_qa_pairs_to_json(processed_qa, json_path)
+        
+        return processed_qa
     
 
     # Extracts Q&A pairs from document text using LLM when regular regex parsing fails.
@@ -766,6 +787,16 @@ class TextRAGProcessor:
             eval_id = os.urandom(4).hex()
             logger.info(f"Starting evaluation {eval_id} - submission: {os.path.basename(submission_path)}, ideal: {os.path.basename(ideal_path)}")
             
+            # Generate an incremental submission ID for the student submission
+            result = self.counters.find_one_and_update(
+                {"_id": "student_submission_id"},
+                {"$inc": {"value": 1}},
+                return_document=True
+            )
+            submission_id = result["value"]
+            submission_timestamp = datetime.now()
+            logger.info(f"Generated submission ID: {submission_id} at {submission_timestamp}")
+            
             # Verify embedding model availability
             model_available = self._verify_embedding_model()
             if not model_available:
@@ -793,9 +824,9 @@ class TextRAGProcessor:
                     "message": "No questions found in the ideal document. Please check the document format."
                 }
             
-            # 2.2 Process submission document
+            # 2.2 Process submission document with the submission ID
             logger.info(f"Processing submission document: {submission_path}")
-            submission_qa_pairs = self.process_qa_document(submission_path, is_ideal=False)
+            submission_qa_pairs = self.process_qa_document(submission_path, is_ideal=False, submission_id=submission_id)
             
             if not submission_qa_pairs:
                 return {
@@ -814,6 +845,16 @@ class TextRAGProcessor:
                         "status": "error",
                         "message": "Error generating embeddings. Please try again or check the embedding service."
                     }
+            
+            # Retrieve student embeddings from MongoDB to ensure we're using the stored versions
+            logger.info("Retrieving student embeddings from MongoDB")
+            stored_student_qa_pairs = self.retrieve_student_embeddings(submission_id)
+            
+            if not stored_student_qa_pairs:
+                logger.warning("No stored student embeddings found, using in-memory embeddings")
+            else:
+                logger.info(f"Using {len(stored_student_qa_pairs)} stored student embeddings for evaluation")
+                submission_qa_pairs = stored_student_qa_pairs
             
             # 3. Map submission QA pairs to ideal QA pairs and return the quality of each mapping
             logger.info("Mapping submission QA pairs to ideal QA pairs")
@@ -857,6 +898,33 @@ class TextRAGProcessor:
                 overall_score
             )
             
+            # Store submission metadata in MongoDB
+            submission_metadata = {
+                "submission_id": submission_id,
+                "eval_id": eval_id,
+                "timestamp": submission_timestamp,
+                "overall_score": overall_score,
+                "total_questions": total_questions,
+                "high_matches": high_matches,
+                "medium_matches": medium_matches,
+                "low_matches": low_matches,
+                "poor_matches": poor_matches,
+                "missing": missing,
+                "filename": os.path.basename(submission_path)
+            }
+            
+            # Use a compound ID for metadata documents to avoid duplicate key errors
+            metadata_doc_id = f"metadata_{submission_id}"
+            self.student_submissions.replace_one(
+                {"_id": metadata_doc_id},
+                {
+                    "_id": metadata_doc_id,
+                    **submission_metadata
+                },
+                upsert=True
+            )
+            logger.info(f"Stored submission metadata for submission_id: {submission_id}")
+            
             # Clean the mappings to ensure they can be JSON serialized
             cleaned_mappings = self._clean_for_json(qa_mappings)
             
@@ -864,6 +932,8 @@ class TextRAGProcessor:
             result = {
                 "status": "success",
                 "eval_id": eval_id,
+                "submission_id": submission_id,  # Include the submission ID in the response
+                "submission_timestamp": submission_timestamp.isoformat(),  # Include the timestamp
                 "overall_score": overall_score,  # Added at top level for UI compatibility
                 "stats": {
                     "total_questions": total_questions,
@@ -887,6 +957,34 @@ class TextRAGProcessor:
                     "question_mapping": cleaned_mappings
                 }
             }
+            
+            # Save evaluation results to a local JSON file
+            submission_filename = os.path.basename(submission_path)
+            base_name = os.path.splitext(submission_filename)[0]
+            evaluation_path = os.path.join(self.qa_files_dir, "evaluations", f"{base_name}_eval_{submission_id}.json")
+            
+            # Ensure evaluations directory exists
+            os.makedirs(os.path.join(self.qa_files_dir, "evaluations"), exist_ok=True)
+            
+            # Save the evaluation results
+            import json
+            with open(evaluation_path, 'w') as f:
+                json.dump(result, f, indent=2, default=str)  # default=str handles datetime serialization
+            
+            logger.info(f"Saved evaluation results to {evaluation_path}")
+            submission_filename = os.path.basename(submission_path)
+            base_name = os.path.splitext(submission_filename)[0]
+            evaluation_path = os.path.join(self.qa_files_dir, "evaluations", f"{base_name}_eval_{submission_id}.json")
+            
+            # Ensure evaluations directory exists
+            os.makedirs(os.path.join(self.qa_files_dir, "evaluations"), exist_ok=True)
+            
+            # Save the evaluation results
+            import json
+            with open(evaluation_path, 'w') as f:
+                json.dump(result, f, indent=2, default=str)  # default=str handles datetime serialization
+            
+            logger.info(f"Saved evaluation results to {evaluation_path}")
             
             # Return the final evaluation result
             return result
@@ -1058,6 +1156,7 @@ class TextRAGProcessor:
                 f"- Embedding Similarity: {similarity_metrics['embedding_similarity']:.2f}\n"
                 f"- Text Similarity: {similarity_metrics['text_similarity']:.2f}\n"
                 f"- Term Overlap: {similarity_metrics['token_overlap']:.2f}\n"
+                f"- Combined Similarity: {similarity_metrics['combined_similarity']:.2f}\n"
                 f"- Overall Quality: {quality.upper()}"
             )
             
@@ -1144,448 +1243,140 @@ class TextRAGProcessor:
             return "Your answer needs significant improvement. It appears you may be missing some fundamental understanding of this topic. I recommend reviewing the course materials, focusing on the basic concepts and terminology, and then try reframing your answer to address all parts of the question."
     
     # 3. Maps student submission Q&A pairs to the most similar ideal Q&A pairs using two-phase matching
-    def _map_qa_pairs(self, submission_qa_pairs: Dict[str, Dict[str, Any]], emphasize_embedding=True) -> List[Dict[str, Any]]:
-        """Map submission Q&A pairs to ideal Q&A pairs using embeddings. 
-        This method performs a two-phase matching:
-        1. First it matches questions based on similarity to find the right pairing
-        2. Then it assesses answer quality using detailed comparison metrics
+    def _map_qa_pairs(self, submission_qa_pairs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Map submission QA pairs to ideal QA pairs and evaluate quality.
         
         Args:
-            submission_qa_pairs: Dictionary of submission Q&A pairs
-            emphasize_embedding: If True, emphasizes embedding similarity over other metrics
+            submission_qa_pairs: Dictionary of student QA pairs, including their embeddings
             
         Returns:
-            List of mappings between submission and ideal Q&A pairs
+            List of QA mappings, each with quality score
         """
-        logger.info("========== RETRIEVAL STAGE ==========")
-        logger.info(f"Mapping submission QA pairs to ideal QA pairs")
-        
-       
-        
-        # 3.1 Retrieve ideal Q&A pairs from MongoDB and student submission are passed as a parameter
-        # 3.2 Check for missing question embeddings in ideal Q&A pairs and generate them if needed
-        # 3.3 First phase - match questions based on similarity
-        # 3.4 Second phase - assess answer quality using comprehensive comparison between submission and ideal mapping
-        # 3.5 Extract similarity metrics
-        # 3.6 Determine quality level based on combined similarity
-        # 3.7 Create the mapping
-        
-        ideal_qa_pairs = self.retrieve_ideal_embeddings()
-        logger.info(f"Retrieved {len(ideal_qa_pairs)} ideal Q&A pairs from MongoDB ({sum(1 for qa in ideal_qa_pairs.values() if 'question_embedding' in qa)} with question embeddings)")
-        
-        if not ideal_qa_pairs:
-            logger.error("No ideal Q&A pairs found in the database")
-            return []
-        
-        # Map student submissions to ideal answers
-        logger.info(f"Mapping {len(submission_qa_pairs)} submissions to {len(ideal_qa_pairs)} ideal Q&A pairs")
-        
-        # Decide whether to emphasize embedding similarity for this evaluation
-        if emphasize_embedding:
-            logger.info("Using embedding-focused similarity for answer scoring")
-            
-        # Prepare for mapping
+        logger.info("========== MAPPING STAGE ==========")
         mappings = []
         
-        # Initialize collections for tracking best matches
-        mapped_submission_ids = set()
-        mapped_ideal_ids = set()
+        # Verify that student embeddings are available
+        for qa_id, qa_data in submission_qa_pairs.items():
+            if 'embedding' not in qa_data or qa_data['embedding'] is None:
+                logger.warning(f"Student answer embedding missing for {qa_id}, skipping")
+                continue
+                
+            if 'question_embedding' not in qa_data or qa_data['question_embedding'] is None:
+                logger.warning(f"Student question embedding missing for {qa_id}, skipping")
+                continue
         
-        logger.info("========== QUESTION MAPPING STAGE ==========")
-        logger.info("Finding best matches between student and ideal questions")
+        # Retrieve ideal QA pairs
+        ideal_qa_pairs = self.retrieve_ideal_embeddings()
+        if not ideal_qa_pairs:
+            logger.error("Failed to retrieve ideal QA pairs from MongoDB")
+            return []
         
-        # Track which ideal questions have been matched to avoid duplicates
-        matched_ideal_ids = set()
-        
-        # 3.2 Check for missing question embeddings in ideal Q&A pairs and generate them if needed
-        self._ensure_question_embeddings(ideal_qa_pairs)
-        
-        # 3.3 First phase - match questions based on similarity
-        for sub_id, sub_qa in submission_qa_pairs.items():
-            submission_question = sub_qa.get("question", "")
-            submission_answer = sub_qa.get("answer", "")
-            
-            if not submission_question or not submission_answer:
-                logger.warning(f"Skipping submission {sub_id} - missing question or answer")
+        # Ensure ideal embeddings are available
+        for qa_id, qa_data in ideal_qa_pairs.items():
+            if 'embedding' not in qa_data or qa_data['embedding'] is None:
+                logger.warning(f"Ideal answer embedding missing for {qa_id}, skipping")
+                continue
+                
+            if 'question_embedding' not in qa_data or qa_data['question_embedding'] is None:
+                logger.warning(f"Ideal question embedding missing for {qa_id}, skipping")
                 continue
             
-            if "question_embedding" not in sub_qa:
-                logger.warning(f"Submission {sub_id} missing question embedding, generating it now")
-                try:
-                    # Generate question embedding on the fly
-                    question_embedding = self.generate_embedding(submission_question)
-                    sub_qa["question_embedding"] = question_embedding.tolist() if hasattr(question_embedding, 'tolist') else question_embedding
-                except Exception as e:
-                    logger.error(f"Failed to generate question embedding for {sub_id}: {e}")
+        # First pass: Map based on question similarity
+        for ideal_qa_id, ideal_qa_data in ideal_qa_pairs.items():
+            # Get the question embedding for the ideal question
+            ideal_question_embedding = ideal_qa_data.get('question_embedding')
+            if ideal_question_embedding is None:
+                logger.warning(f"Ideal question embedding missing for {ideal_qa_id}, skipping")
+                continue
+            
+            # Find the most similar student question
+            best_match = None
+            best_similarity = -1
+            
+            for sub_qa_id, sub_qa_data in submission_qa_pairs.items():
+                # Get the question embedding for the student question
+                sub_question_embedding = sub_qa_data.get('question_embedding')
+                if sub_question_embedding is None:
+                    logger.warning(f"Student question embedding missing for {sub_qa_id}, skipping")
                     continue
+                
+                # Calculate question similarity
+                q_similarity = self._compute_similarity(sub_question_embedding, ideal_question_embedding)
+                
+                if q_similarity > best_similarity:
+                    best_similarity = q_similarity
+                    best_match = sub_qa_id
             
-            # Find the most similar ideal question
-            best_match_id = None
-            best_match_similarity = -1
+            # No match found
+            if best_match is None or best_similarity < self.question_similarity_threshold:
+                logger.info(f"No good match found for question {ideal_qa_id}")
+                mappings.append({
+                    'ideal_qa_id': ideal_qa_id,
+                    'student_qa_id': None,
+                    'question_similarity': 0,
+                    'answer_similarity': 0,
+                    'quality': "missing"
+                })
+                continue
+                
+            # Get the answer embeddings
+            ideal_answer_embedding = ideal_qa_data.get('embedding')
+            sub_answer_embedding = submission_qa_pairs[best_match].get('embedding')
             
-            # 3.3.1 For each ideal Q&A pair, calculate the similarity between the submission question and the ideal question
-            for ideal_id, ideal_qa in ideal_qa_pairs.items():
-
-                # if question embedding is missing, generate it on the fly
-                if "question_embedding" not in ideal_qa:
-                    logger.warning(f"Ideal question {ideal_id} missing embedding, generating it now")
-                    try:
-                        # Generate question embedding on the fly
-                        ideal_question = ideal_qa.get("question", "")
-                        question_embedding = self.generate_embedding(ideal_question)
-                        ideal_qa["question_embedding"] = question_embedding.tolist() if hasattr(question_embedding, 'tolist') else question_embedding
-                        
-                        # Store in database for future use
-                        self.qa_embeddings.update_one(
-                            {"qa_id": ideal_id, "is_ideal": True},
-                            {"$set": {"question_embedding": ideal_qa["question_embedding"]}}
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to generate question embedding for ideal {ideal_id}: {e}")
-                        continue
+            if ideal_answer_embedding is None or sub_answer_embedding is None:
+                logger.warning(f"Answer embedding missing, skipping comparison")
+                continue
                 
-                # 3.3.2 Calculate similarity between question embeddings
-                question_similarity = self._calculate_similarity(
-                    sub_qa["question_embedding"], 
-                    ideal_qa["question_embedding"]
-                )
-                
-                # Update best match if this is better
-                if question_similarity > best_match_similarity:
-                    best_match_similarity = question_similarity
-                    best_match_id = ideal_id
+            # Calculate answer similarity
+            answer_similarity = self._compute_similarity(sub_answer_embedding, ideal_answer_embedding)
             
-            # 3.4 If we found a match and the question similarity is above the threshold
-            # then we can proceed to the second phase
-            if best_match_id and best_match_similarity > 0.5:  # Question similarity threshold
-                ideal_qa = ideal_qa_pairs[best_match_id]
-                ideal_question = ideal_qa.get("question", "")
-                ideal_answer = ideal_qa.get("answer", "")
+            # Determine quality based on answer similarity
+            quality = self._determine_quality(answer_similarity)
                 
-                logger.debug(f"Matched submission {sub_id} to ideal {best_match_id} (question sim: {best_match_similarity:.4f})")
-                
-                # 3.4 Second phase - assess answer quality using comprehensive comparison
-                comparison_results = self.compare_answers(submission_answer, ideal_answer, emphasize_embedding=emphasize_embedding)
-                
-                # 3.5 Extract similarity metrics
-                embedding_similarity = comparison_results["embedding_similarity"]
-                text_similarity = comparison_results["text_similarity"]
-                token_overlap = comparison_results["token_overlap"]
-                combined_similarity = comparison_results["combined_similarity"]
-                
-                # Determine quality level based on combined similarity
-                quality = "poor"
-                if combined_similarity >= self.sim_threshold_high:
-                    quality = "high"
-                elif combined_similarity >= self.sim_threshold_medium:
-                    quality = "medium"
-                elif combined_similarity >= self.sim_threshold_low:
-                    quality = "low"
-                
-                # Create the mapping
-                mapping = {
-                    "submission_id": sub_id,
-                    "ideal_id": best_match_id,
-                    "submission_question": submission_question,
-                    "submission_answer": submission_answer,
-                    "ideal_question": ideal_question,
-                    "ideal_answer": ideal_answer,
-                    "question_similarity": best_match_similarity,
-                    "answer_similarity": combined_similarity,  # Use combined score as the main similarity measure
-                    "embedding_similarity": embedding_similarity,
-                    "text_similarity": text_similarity,
-                    "token_overlap": token_overlap,
-                    "quality": quality
-                }
-                
-                mappings.append(mapping)
-                matched_ideal_ids.add(best_match_id)
+            # Add mapping
+            mappings.append({
+                'ideal_qa_id': ideal_qa_id,
+                'student_qa_id': best_match,
+                'question_similarity': float(best_similarity),
+                'answer_similarity': float(answer_similarity),
+                'quality': quality
+            })
             
-        # Add missing ideal questions (those that weren't matched to any submission)
-        for ideal_id, ideal_qa in ideal_qa_pairs.items():
-            if ideal_id not in matched_ideal_ids:
-                # This ideal question wasn't matched to any submission
-                ideal_question = ideal_qa.get("question", "")
-                ideal_answer = ideal_qa.get("answer", "")
-                
-                logger.warning(f"Ideal question not answered: {ideal_question[:80]}...")
-                
-                # Add as a missing question
-                mapping = {
-                    "submission_id": None,
-                    "ideal_id": ideal_id,
-                    "submission_question": None,
-                    "submission_answer": None,
-                    "ideal_question": ideal_question,
-                    "ideal_answer": ideal_answer,
-                    "question_similarity": 0.0,
-                    "answer_similarity": 0.0,
-                    "embedding_similarity": 0.0,
-                    "text_similarity": 0.0,
-                    "token_overlap": 0.0,
-                    "quality": "missing"
-                }
-                
-                mappings.append(mapping)
-            
-        logger.info(f"Created {len(mappings)} mappings between submission and ideal Q&A pairs")
-        logger.debug(f"Quality distribution: " + 
-                    f"High={len([m for m in mappings if m['quality'] == 'high'])}, " +
-                    f"Medium={len([m for m in mappings if m['quality'] == 'medium'])}, " +
-                    f"Low={len([m for m in mappings if m['quality'] == 'low'])}, " +
-                    f"Poor={len([m for m in mappings if m['quality'] == 'poor'])}, " +
-                    f"Missing={len([m for m in mappings if m['quality'] == 'missing'])}")
+            logger.info(f"Mapped question {ideal_qa_id} to {best_match} with Q-sim={best_similarity:.4f}, A-sim={answer_similarity:.4f}, quality={quality}")
                 
         return mappings
         
-    # Validates that all QA pairs have question embeddings and reports status
-    def _ensure_question_embeddings(self, qa_pairs: Dict[str, Dict[str, Any]]) -> None:
+    def _compute_similarity(self, vec1, vec2):
         """
-        Ensures all QA pairs have question embeddings by counting and reporting status.
-        
-        Args:
-            qa_pairs: Dictionary of Q&A pairs
+        Compute cosine similarity between two embeddings.
+        Handles both numpy arrays and lists.
         """
-        total = len(qa_pairs)
-        with_embeddings = sum(1 for qa in qa_pairs.values() if "question_embedding" in qa)
+        import numpy as np
         
-        if with_embeddings < total:
-            logger.warning(f"Only {with_embeddings}/{total} ideal QA pairs have question embeddings")
-            # Missing embeddings will be handled individually during mapping
-    
-    # 3.2 Calculates enhanced cosine similarity between two embedding vectors with normalization
-    def _calculate_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """
-        Calculate an enhanced cosine similarity between two vectors.
-        
-        This uses cosine similarity with additional normalization and 
-        non-linear scaling to better differentiate high similarities.
-        
-        Args:
-            vec1: First vector
-            vec2: Second vector
-            
-        Returns:
-            Enhanced similarity score between 0 and 1
-        """
-        if vec1 is None or vec2 is None:
-            logger.warning("Received None vector in similarity calculation")
-            return 0.0
-        
-        # Convert to numpy arrays if not already
-        if not isinstance(vec1, np.ndarray):
+        # Convert to numpy arrays if they're lists
+        if isinstance(vec1, list):
             vec1 = np.array(vec1)
-        if not isinstance(vec2, np.ndarray):
+        if isinstance(vec2, list):
             vec2 = np.array(vec2)
         
-        # Apply normalization for numerical stability
-        try:
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
+        # Ensure we're working with 1D arrays
+        if len(vec1.shape) > 1:
+            vec1 = vec1.flatten()
+        if len(vec2.shape) > 1:
+            vec2 = vec2.flatten()
+        
+        # Compute cosine similarity
+        similarity = float(1 - cosine(vec1, vec2))
             
-            if norm1 == 0 or norm2 == 0:
-                logger.warning("Zero norm vector detected in similarity calculation")
-                return 0.0
-            
-            vec1_normalized = vec1 / norm1
-            vec2_normalized = vec2 / norm2
-            
-            # Calculate raw cosine similarity
-            raw_similarity = np.dot(vec1_normalized, vec2_normalized)
-            
-            # Apply non-linear scaling to emphasize differences in high similarity range
-            # This amplifies differences between 0.7-1.0 range and reduces impact of low similarities
-            enhanced_similarity = 0.0
-            
-            if raw_similarity > 0.7:
-                # Scale the high similarity range (0.7-1.0) to (0.5-1.0)
-                enhanced_similarity = 0.5 + 0.5 * ((raw_similarity - 0.7) / 0.3)
-            else:
-                # Compress the lower similarity range (0-0.7) to (0-0.5)
-                enhanced_similarity = (raw_similarity / 0.7) * 0.5
-            
-            # Ensure the result is in [0, 1]
-            enhanced_similarity = max(0.0, min(1.0, enhanced_similarity))
-            
-            # Log the calculation for debugging
-            if random.random() < 0.05:  # Only log a small percentage of calculations
-                logger.debug(f"Similarity: raw={raw_similarity:.4f}, enhanced={enhanced_similarity:.4f}")
-            
-            return enhanced_similarity
-            
-        except Exception as e:
-            logger.error(f"Error in similarity calculation: {e}")
-            return 0.0
+        # Ensure the result is a python float
+        return float(similarity)
     
-    # 3.3 Comprehensively compares student answers to ideal answers using multiple similarity metrics
-    def compare_answers(self, student_answer: str, ideal_answer: str, emphasize_embedding=False) -> Dict[str, Any]:
-        """
-        Comprehensively compare a student answer to an ideal answer using multiple similarity metrics.
-        
-        Args:
-            student_answer: The student's submitted answer
-            ideal_answer: The ideal reference answer
-            emphasize_embedding: If True, uses embedding similarity as the primary score
-            
-        Returns:
-            Dict containing similarity metrics, key concepts, and quality assessment
-        """
-        logger.info("========== AUGMENTATION STAGE ==========")
-        logger.info(f"Comparing answers using multiple similarity methods (emphasize_embedding={emphasize_embedding})")
-        
-        start_time = datetime.now()
-        
-        # Initialize results
-        result = {
-            "embedding_similarity": 0.0,
-            "text_similarity": 0.0,
-            "token_overlap": 0.0,
-            "combined_similarity": 0.0
-        }
-        
-        try:
-            # Import needed modules locally to ensure they're available in this method
-            import difflib
-            from collections import Counter
-            import re
-            
-            # Rest of method continues as normal...
-            
-            # 3.3.1 Normalize text (lower case, remove extra whitespace)
-            # 3.3.2 Calculate semantic similarity using embeddings (cosine similarity)
-            # 3.3.3 Calculate text similarity using SequenceMatcher (difflib)
-            # 3.3.4 Calculate token overlap (Jaccard similarity on words)
-            # 3.3.5 Calculate term match score
-            # 3.3.6 Calculate combined similarity with weighted contributions
-            
-            def normalize_text(text):
-                text = text.lower()
-                text = re.sub(r'\s+', ' ', text).strip()
-                return text
-            
-            student_normalized = normalize_text(student_answer)
-            ideal_normalized = normalize_text(ideal_answer)
-            
-            # Skip empty answers
-            if not student_normalized or not ideal_normalized:
-                logger.warning("Empty answer detected in comparison")
-                return result
-            
-            # 3.3.2 Calculate semantic similarity using embeddings
-            student_embedding = self.generate_embedding(student_normalized)
-            ideal_embedding = self.generate_embedding(ideal_normalized)
-            
-            if student_embedding is not None and ideal_embedding is not None:
-                result["embedding_similarity"] = self._calculate_similarity(
-                    student_embedding, ideal_embedding
-                )
-                
-            # 3.3.3 If emphasize_embedding is True, set combined_similarity directly to embedding_similarity
-            # and return early with quality assessment
-            if emphasize_embedding:
-                result["combined_similarity"] = result["embedding_similarity"]
-                result["quality"] = self._determine_quality(result["combined_similarity"])
-                result["calculation_time"] = (datetime.now() - start_time).total_seconds()
-                return result
-            
-            # 3.3.4 Calculate text similarity using SequenceMatcher
-            sequence_similarity = difflib.SequenceMatcher(
-                None, student_normalized, ideal_normalized
-            ).ratio()
-            result["text_similarity"] = sequence_similarity
-            
-            # 3.3.5 Calculate token overlap (Jaccard similarity on words)
-            def tokenize(text):
-                # Extract words, remove stopwords and punctuation
-                words = re.findall(r'\b[a-z0-9]+\b', text)
-                # Filter out very common words and very short words
-                stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 
-                             'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'as', 'that'}
-                words = [w for w in words if w not in stopwords and len(w) > 2]
-                return words
-            
-            student_tokens = tokenize(student_normalized)
-            ideal_tokens = tokenize(ideal_normalized)
-            
-            # 3.3.6 Calculate Jaccard similarity
-            if student_tokens and ideal_tokens:
-                student_token_set = set(student_tokens)
-                ideal_token_set = set(ideal_tokens)
-                
-                intersection = len(student_token_set.intersection(ideal_token_set))
-                union = len(student_token_set.union(ideal_token_set))
-                
-                if union > 0:
-                    result["token_overlap"] = intersection / union
-                
-            # Also consider term frequency for key concepts
-            student_counts = Counter(student_tokens)
-            ideal_counts = Counter(ideal_tokens)
-            
-            # Get the top N most frequent terms in ideal answer
-            top_n = 10
-            ideal_key_terms = dict(ideal_counts.most_common(top_n))
-            
-            # Check how many key terms appear in student answer with similar frequency
-            term_match_score = 0
-            for term, ref_count in ideal_key_terms.items():
-                student_count = student_counts.get(term, 0)
-                if student_count > 0:
-                    # Score based on how close the frequency is
-                    frequency_ratio = min(student_count / ref_count, 1.0) if ref_count > 0 else 0
-                    term_match_score += frequency_ratio
-                    
-            # Normalize term match score
-            if ideal_key_terms:
-                term_match_score /= len(ideal_key_terms)
-                # Blend with token overlap
-                result["token_overlap"] = 0.5 * result["token_overlap"] + 0.5 * term_match_score
-                
-            # Calculate combined similarity with weighted contributions
-            # - Embedding similarity is most important (semantic understanding)
-            # - Text similarity helps catch structural similarities
-            # - Token overlap ensures key concepts are present
-            # Increase weight of embedding similarity from 0.6 to 0.8 to emphasize semantic understanding
-            result["combined_similarity"] = (
-                0.8 * result["embedding_similarity"] +
-                0.1 * result["text_similarity"] + 
-                0.1 * result["token_overlap"]
-            )
-            
-            # Ensure combined score is in [0, 1]
-            result["combined_similarity"] = max(0.0, min(1.0, result["combined_similarity"]))
-            
-            # Add quality assessment to result
-            result["quality"] = self._determine_quality(result["combined_similarity"])
-            result["calculation_time"] = (datetime.now() - start_time).total_seconds()
-            
-            # Debugging - log comparison details occasionally
-            if random.random() < 0.1:  # Log ~10% of comparisons
-                logger.debug(f"Answer comparison: emb={result['embedding_similarity']:.4f}, " +
-                            f"text={result['text_similarity']:.4f}, " +
-                            f"token={result['token_overlap']:.4f}, " +
-                            f"combined={result['combined_similarity']:.4f}")
-            
-            # Log performance for monitoring
-            elapsed_time = (datetime.now() - start_time).total_seconds()
-            logger.debug(f"Answer comparison completed in {elapsed_time:.2f}s")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error in answer comparison: {e}")
-            logger.error(traceback.format_exc())
-            
-            # On error, return initial empty result with error flag
-            result["error"] = str(e)
-            return result
-    
-    def _determine_quality(self, combined_similarity):
-        if combined_similarity >= self.high_quality_threshold:
+    def _determine_quality(self, similarity):
+        if similarity >= self.high_quality_threshold:
             return "high"
-        elif combined_similarity >= self.medium_quality_threshold:
+        elif similarity >= self.medium_quality_threshold:
             return "medium"
-        elif combined_similarity >= self.low_quality_threshold:
+        elif similarity >= self.low_quality_threshold:
             return "low"
         else:
             return "poor"
@@ -1777,6 +1568,29 @@ class TextRAGProcessor:
             # Set up collections
             db = self.mongodb_client[db_name]
             self.qa_embeddings = db["qa_embeddings"]
+            self.student_submissions = db["student_submissions"]
+            self.counters = db["counters"]
+            
+            # Create indexes for efficient querying - make submission_id non-unique
+            # Drop the existing unique index if it exists
+            try:
+                self.student_submissions.drop_index("submission_id_1")
+                logger.info("Dropped existing unique index on submission_id")
+            except Exception as e:
+                logger.debug(f"No existing index to drop: {e}")
+            
+            # Create a non-unique index on submission_id
+            self.student_submissions.create_index([("submission_id", 1)])
+            
+            # Create a compound index on submission_id and qa_id
+            self.student_submissions.create_index([("submission_id", 1), ("qa_id", 1)], unique=True)
+            
+            self.student_submissions.create_index([("timestamp", -1)])
+            
+            # Initialize counter for student submission IDs if it doesn't exist
+            if self.counters.count_documents({"_id": "student_submission_id"}) == 0:
+                self.counters.insert_one({"_id": "student_submission_id", "value": 0})
+                logger.info("Initialized student submission ID counter")
             
             logger.info(f"Connected to MongoDB database: {db_name}")
             return True
@@ -1786,6 +1600,8 @@ class TextRAGProcessor:
             logger.debug(f"MongoDB connection error details: {e}")
             self.mongodb_client = None
             self.qa_embeddings = None
+            self.student_submissions = None
+            self.counters = None
             return False
 
     # Safely truncates text to avoid exceeding token limits while preserving readability
@@ -1831,96 +1647,122 @@ class TextRAGProcessor:
         evaluations = []
         
         for mapping in qa_mappings:
-            quality = mapping.get("quality", "poor")
-            
-            if quality == "missing":
-                # For missing answers, create an evaluation with empty student answers
-                evaluations.append({
-                    "question": mapping["ideal_question"],
-                    "student_answer": "[No answer provided]",
-                    "reference_answer": mapping["ideal_answer"],
-                    "quality": "missing",
-                    "similarity": 0.0,
-                    "question_similarity": 0.0,
-                    "combined_score": 0.0,
-                    "numerical_score": 0,
-                    "key_concepts_present": [],
-                    "key_concepts_missing": ["All concepts missing"],
-                    "feedback": "This question was not answered in your submission."
-                })
-            else:
-                # For answered questions, include all the details
-                sub_id = mapping["submission_id"]
-                answer_similarity = mapping.get("answer_similarity", 0.0)
-                question_similarity = mapping.get("question_similarity", 0.0)
+            try:
+                quality = mapping.get("quality", "poor")
                 
-                # Generate the detailed feedback
-                feedback = self._generate_answer_feedback(
+                if quality == "missing":
+                    # For missing answers, create an evaluation with empty student answers
+                    evaluations.append({
+                                        "question": mapping.get("ideal_question", ""),
+                        "student_answer": "[No answer provided]",
+                                        "reference_answer": mapping.get("ideal_answer", ""),
+                        "quality": "missing",
+                        "similarity": 0.0,
+                        "question_similarity": 0.0,
+                        "combined_score": 0.0,
+                        "numerical_score": 0,
+                        "key_concepts_present": [],
+                        "key_concepts_missing": ["All concepts missing"],
+                        "feedback": "This question was not answered in your submission."
+                    })
+                else:
+                    # For answered questions, include all the details
+                    # Get the student_qa_id which should be available
+                    student_qa_id = mapping.get("student_qa_id")
+                    ideal_qa_id = mapping.get("ideal_qa_id")
+                                
+                    if not student_qa_id or student_qa_id not in submission_qa_pairs:
+                        logger.warning(f"No valid student_qa_id found in mapping: {mapping}")
+                        continue
+                                
+                    # Use student_qa_id as the key for submission_qa_pairs
+                    sub_id = student_qa_id
+                                
+                    answer_similarity = mapping.get("answer_similarity", 0.0)
+                    question_similarity = mapping.get("question_similarity", 0.0)
+                                
+                    # Get the ideal answer
+                    ideal_answer = mapping.get("ideal_answer", "")
+                    if not ideal_answer and ideal_qa_id and ideal_qa_id in ideal_qa_pairs:
+                        ideal_answer = ideal_qa_pairs[ideal_qa_id].get("answer", "")
+                                
+                    # Get the submission question
+                    submission_question = submission_qa_pairs[sub_id].get("question", "")
+                    
+                    # Generate the detailed feedback
+                    feedback = self._generate_answer_feedback(
                     submission_qa_pairs[sub_id]["answer"],
-                    mapping["ideal_answer"],
-                    quality
-                )
-                
-                # Parse numerical score from feedback if available (format: "Numerical Score: 85")
-                numerical_score = None
-                key_concepts_present = []
-                key_concepts_missing = []
-                
-                try:
-                    # Try to extract enhanced feedback components
-                    lines = feedback.split('\n')
-                    for line in lines:
-                        line = line.strip()
-                        
-                        # Extract numerical score
-                        if line.startswith("Numerical Score:"):
-                            score_text = line.replace("Numerical Score:", "").strip()
-                            if score_text.isdigit():
-                                numerical_score = int(score_text)
-                        
-                        # Extract key concepts
-                        if line.startswith("Key Concepts Present:"):
-                            concepts_text = line.replace("Key Concepts Present:", "").strip()
-                            # Split the concepts, accounting for list formatting [item1, item2]
-                            if concepts_text.startswith("[") and concepts_text.endswith("]"):
-                                concepts_text = concepts_text[1:-1]
-                            key_concepts_present = [c.strip() for c in concepts_text.split(',') if c.strip()]
+                                        ideal_answer,
+                        quality
+                    )
+                    
+                    # Get the combined similarity if available
+                    student_answer = submission_qa_pairs[sub_id]["answer"]
+                    similarity_metrics = self.compare_answers(student_answer, ideal_answer)
+                    combined_similarity = similarity_metrics.get("combined_similarity", answer_similarity)
+                                
+                        # Parse numerical score from feedback if available
+                    numerical_score = None
+                    key_concepts_present = []
+                    key_concepts_missing = []
+                    
+                    try:
+                        # Try to extract enhanced feedback components
+                        lines = feedback.split('\n')
+                        for line in lines:
+                            line = line.strip()
                             
-                        if line.startswith("Key Concepts Missing:"):
-                            concepts_text = line.replace("Key Concepts Missing:", "").strip()
-                            # Split the concepts, accounting for list formatting [item1, item2]
-                            if concepts_text.startswith("[") and concepts_text.endswith("]"):
-                                concepts_text = concepts_text[1:-1]
-                            key_concepts_missing = [c.strip() for c in concepts_text.split(',') if c.strip()]
-                
-                except Exception as e:
-                    logger.warning(f"Error parsing enhanced feedback: {e}")
-                
-                # If numerical score wasn't found, provide a default based on quality
-                if numerical_score is None:
-                    if quality == "high":
-                        numerical_score = int(answer_similarity * 100)
-                    elif quality == "medium":
-                        numerical_score = int(answer_similarity * 90)
-                    elif quality == "low":
-                        numerical_score = int(answer_similarity * 75)
-                    else:
-                        numerical_score = int(answer_similarity * 50)
-                
-                # Use answer similarity as the primary score displayed
-                evaluations.append({
-                    "question": mapping["submission_question"],
-                    "student_answer": submission_qa_pairs[sub_id]["answer"],
-                    "reference_answer": mapping["ideal_answer"],
-                    "quality": quality,
-                    "similarity": answer_similarity,  # Primary score is answer similarity
-                    "question_similarity": question_similarity,
-                    "combined_score": answer_similarity,  # For consistency, use answer similarity as combined score
-                    "numerical_score": numerical_score,
-                    "key_concepts_present": key_concepts_present,
-                    "key_concepts_missing": key_concepts_missing,
-                    "feedback": feedback
-                })
+                            # Extract numerical score
+                            if line.startswith("Numerical Score:"):
+                                score_text = line.replace("Numerical Score:", "").strip()
+                                if score_text.isdigit():
+                                    numerical_score = int(score_text)
+                            
+                            # Extract key concepts
+                            if line.startswith("Key Concepts Present:"):
+                                concepts_text = line.replace("Key Concepts Present:", "").strip()
+                                # Split the concepts, accounting for list formatting [item1, item2]
+                                if concepts_text.startswith("[") and concepts_text.endswith("]"):
+                                    concepts_text = concepts_text[1:-1]
+                                key_concepts_present = [c.strip() for c in concepts_text.split(',') if c.strip()]
+                                
+                            if line.startswith("Key Concepts Missing:"):
+                                concepts_text = line.replace("Key Concepts Missing:", "").strip()
+                                # Split the concepts, accounting for list formatting [item1, item2]
+                                if concepts_text.startswith("[") and concepts_text.endswith("]"):
+                                    concepts_text = concepts_text[1:-1]
+                                key_concepts_missing = [c.strip() for c in concepts_text.split(',') if c.strip()]
+                    except Exception as e:
+                        logger.warning(f"Error parsing enhanced feedback: {e}")
+                    
+                    # If numerical score wasn't found, provide a default based on quality
+                    if numerical_score is None:
+                        if quality == "high":
+                            numerical_score = int(answer_similarity * 100)
+                        elif quality == "medium":
+                            numerical_score = int(answer_similarity * 90)
+                        elif quality == "low":
+                            numerical_score = int(answer_similarity * 75)
+                        else:
+                            numerical_score = int(answer_similarity * 50)
+                    
+                    # Use answer similarity as the primary score displayed
+                    evaluations.append({
+                                    "question": submission_question,
+                        "student_answer": submission_qa_pairs[sub_id]["answer"],
+                                    "reference_answer": ideal_answer,
+                        "quality": quality,
+                        "similarity": answer_similarity,  # Primary score is answer similarity
+                        "question_similarity": question_similarity,
+                                    "combined_score": combined_similarity,  # For consistency
+                        "numerical_score": numerical_score,
+                        "key_concepts_present": key_concepts_present,
+                        "key_concepts_missing": key_concepts_missing,
+                        "feedback": feedback
+                    })
+            except Exception as e:
+                logger.error(f"Error formatting question evaluation: {e}")
+                continue
         
         return evaluations
 
@@ -1969,6 +1811,7 @@ class TextRAGProcessor:
                 e_sim = mapping.get("embedding_similarity", 0)
                 t_sim = mapping.get("text_similarity", 0)
                 o_sim = mapping.get("token_overlap", 0)
+                c_sim = mapping.get("combined_similarity", 0)
                 quality = mapping.get("quality", "unknown").upper()
                 
                 # Get snippets of questions and answers (first 80 chars)
@@ -1994,6 +1837,7 @@ class TextRAGProcessor:
                 logger.info(f"    - Embedding Similarity:    {e_sim:.4f}")
                 logger.info(f"    - Text Similarity:         {t_sim:.4f}")
                 logger.info(f"    - Token Overlap:           {o_sim:.4f}")
+                logger.info(f"    - Combined Similarity:     {c_sim:.4f}")
                 logger.info(f"  Student Answer:   {sub_answer_preview}")
                 logger.info(f"  Ideal Answer:     {ideal_answer_preview}")
                 logger.info("-----")
@@ -2094,3 +1938,200 @@ class TextRAGProcessor:
             
             logger.info(f"  [{i+1}] Question: {q_preview}")
             logger.info(f"      Answer: {a_preview}")
+
+    def retrieve_student_embeddings(self, submission_id: int) -> Dict[str, Dict[str, Any]]:
+        """Retrieve student embeddings from MongoDB for a specific submission_id.
+        
+        Args:
+            submission_id: The submission ID to retrieve
+            
+        Returns:
+            Dictionary of student Q&A pairs with embeddings
+        """
+        try:
+            logger.info(f"Retrieving student embeddings for submission_id: {submission_id}")
+            
+            # Query MongoDB for student submissions with this submission_id
+            cursor = self.student_submissions.find({"submission_id": submission_id})
+            
+            student_qa_pairs = {}
+            count = 0
+            
+            for doc in cursor:
+                qa_id = doc.get("qa_id")
+                embedding = doc.get("embedding")  # This is the answer embedding
+                question_embedding = doc.get("question_embedding")
+                
+                if not qa_id or embedding is None:
+                    logger.warning(f"Missing qa_id or embedding for student document in MongoDB, skipping")
+                    continue
+                    
+                # Store all the data
+                student_qa_pairs[qa_id] = {
+                    "question": doc.get("question", ""),
+                    "answer": doc.get("answer", ""),
+                    "answer_embedding": embedding,  # Map the "embedding" field to "answer_embedding"
+                    "embedding": embedding,  # Keep the original field for backward compatibility
+                    "question_embedding": question_embedding
+                }
+                
+                count += 1
+            
+            logger.info(f"Retrieved {count} student Q&A pairs from MongoDB for submission_id: {submission_id}")
+            
+            return student_qa_pairs
+        except Exception as e:
+            logger.error(f"Error retrieving student embeddings for submission_id {submission_id}: {e}")
+            logger.error(traceback.format_exc())
+            return {}
+
+    def generate_submission_id(self) -> int:
+        """Generate a new incremental submission ID from the counters collection.
+        
+        Returns:
+            The new submission ID
+        """
+        try:
+            result = self.counters.find_one_and_update(
+                {"_id": "student_submission_id"},
+                {"$inc": {"value": 1}},
+                return_document=True
+            )
+            submission_id = result["value"]
+            logger.info(f"Generated new submission ID: {submission_id}")
+            return submission_id
+        except Exception as e:
+            logger.error(f"Error generating submission ID: {e}")
+            logger.error(traceback.format_exc())
+            # Return a random ID as fallback
+            fallback_id = int(time.time())
+            logger.warning(f"Using fallback submission ID: {fallback_id}")
+            return fallback_id
+
+    def save_qa_pairs_to_json(self, qa_pairs: Dict[str, Dict[str, Any]], file_path: str) -> bool:
+        """Save question-answer pairs to a local JSON file.
+        
+        Args:
+            qa_pairs: Dictionary of question-answer pairs
+            file_path: Path to save the JSON file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            # Prepare data for JSON serialization
+            json_data = {}
+            for qa_id, qa_data in qa_pairs.items():
+                # Convert numpy arrays to lists for JSON serialization
+                serializable_qa = {}
+                for key, value in qa_data.items():
+                    if isinstance(value, np.ndarray):
+                        serializable_qa[key] = value.tolist()
+                    elif hasattr(value, 'tolist'):  # Handle other array-like objects
+                        serializable_qa[key] = value.tolist()
+                    else:
+                        serializable_qa[key] = value
+                json_data[qa_id] = serializable_qa
+            
+            # Write to file with indentation for readability
+            import json
+            with open(file_path, 'w') as f:
+                json.dump(json_data, f, indent=2)
+            
+            logger.info(f"Saved {len(qa_pairs)} Q&A pairs to {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving Q&A pairs to JSON file {file_path}: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def setup_qa_directories(self):
+        """Set up the directory structure for storing Q&A JSON files."""
+        try:
+            # Create main qa_files directory
+            os.makedirs(self.qa_files_dir, exist_ok=True)
+            
+            # Create subdirectories for ideal and student submissions and evaluations
+            ideal_dir = os.path.join(self.qa_files_dir, "ideal")
+            student_dir = os.path.join(self.qa_files_dir, "student")
+            evaluations_dir = os.path.join(self.qa_files_dir, "evaluations")
+            
+            os.makedirs(ideal_dir, exist_ok=True)
+            os.makedirs(student_dir, exist_ok=True)
+            os.makedirs(evaluations_dir, exist_ok=True)
+            
+            logger.info(f"Set up Q&A file directories at {self.qa_files_dir}")
+            return True
+        except Exception as e:
+            logger.error(f"Error setting up Q&A directories: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def compare_answers(self, student_answer: str, reference_answer: str) -> Dict[str, float]:
+        """
+        Compare student answer with reference answer and return similarity metrics.
+        
+        Args:
+            student_answer: The student's submitted answer
+            reference_answer: The reference/ideal answer
+            
+        Returns:
+            Dictionary with similarity metrics
+        """
+        import difflib
+        import numpy as np
+        from collections import Counter
+        
+        # Calculate embedding similarity if possible
+        try:
+            # Generate embeddings
+            student_embedding = self.generate_embedding(student_answer)
+            reference_embedding = self.generate_embedding(reference_answer)
+            
+            # Calculate cosine similarity
+            embedding_similarity = self._compute_similarity(student_embedding, reference_embedding)
+        except Exception as e:
+            logger.warning(f"Error calculating embedding similarity: {e}")
+            embedding_similarity = 0.0
+        
+        # Calculate text similarity using difflib
+        try:
+            text_similarity = difflib.SequenceMatcher(None, student_answer, reference_answer).ratio()
+        except Exception as e:
+            logger.warning(f"Error calculating text similarity: {e}")
+            text_similarity = 0.0
+        
+        # Calculate token overlap
+        try:
+            # Tokenize answers (simple whitespace tokenization for efficiency)
+            student_tokens = Counter(student_answer.lower().split())
+            reference_tokens = Counter(reference_answer.lower().split())
+            
+            # Calculate overlap
+            common_tokens = sum((student_tokens & reference_tokens).values())
+            total_tokens = sum(reference_tokens.values())
+            
+            token_overlap = common_tokens / total_tokens if total_tokens > 0 else 0.0
+        except Exception as e:
+            logger.warning(f"Error calculating token overlap: {e}")
+            token_overlap = 0.0
+        
+        # Calculate combined similarity with specified weights
+        # 50% embedding similarity, 40% text similarity, 10% token overlap
+        combined_similarity = (
+            0.3 * embedding_similarity +
+            0.5 * text_similarity +
+            0.2 * token_overlap
+        )
+        
+        # Return all metrics
+        return {
+            "embedding_similarity": float(embedding_similarity),
+            "text_similarity": float(text_similarity),
+            "token_overlap": float(token_overlap),
+            "combined_similarity": float(combined_similarity)
+        }

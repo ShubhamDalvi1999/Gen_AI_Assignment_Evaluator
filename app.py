@@ -4,7 +4,7 @@ import ast
 import requests
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo import MongoClient
@@ -32,6 +32,8 @@ from utils.feedback_service import generate_feedback
 from utils.db_service import store_embedding, retrieve_similar_contexts, set_db_client
 from utils.code_analyzer import analyze_code_structure, generate_recommendations, extract_functions_from_file, extract_functions_from_zip
 from utils.logger import app_logger as logger, db_logger
+from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
 
 # Load environment variables
 load_dotenv()
@@ -68,6 +70,15 @@ mongodb_db_name = os.getenv("MONGODB_DB_NAME", "assignment_checker")
 mongodb_embeddings_collection = os.getenv("MONGODB_COLLECTION_NAME", "embeddings")
 mongodb_qa_collection = os.getenv("MONGODB_QA_COLLECTION_NAME", "qa_embeddings")
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configure upload folder
+UPLOAD_FOLDER = 'uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
 # Initialize FastAPI app
 app = FastAPI(title="AI Assignment Checker")
 
@@ -76,6 +87,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Initialize templates
 templates = Jinja2Templates(directory="templates")
+
+# Store upload folder path in app state
+app.state.upload_folder = UPLOAD_FOLDER
 
 class EmbeddingModel(str, Enum):
     OLLAMA = "ollama"
@@ -106,7 +120,30 @@ if mongodb_uri:
         db = mongo_client[mongodb_db_name]
         embeddings_collection = db[mongodb_embeddings_collection]
         
-        db_logger.info(f"MongoDB collections initialized: {mongodb_embeddings_collection}, {mongodb_qa_collection}")
+        # Initialize collections for student submissions
+        student_submissions_collection = db["student_submissions"]
+        counters_collection = db["counters"]
+        
+        # Create indexes for efficient querying if they don't exist
+        # List existing indexes to avoid recreating them
+        existing_indexes = [idx['name'] for idx in student_submissions_collection.list_indexes()]
+        
+        if "submission_id_1" not in existing_indexes:
+            db_logger.info("Creating submission_id index on student_submissions collection")
+            student_submissions_collection.create_index([("submission_id", 1)], unique=True)
+        
+        if "timestamp_-1" not in existing_indexes:
+            db_logger.info("Creating timestamp index on student_submissions collection")
+            student_submissions_collection.create_index([("timestamp", -1)])
+        
+        # Initialize counter for student submission IDs if it doesn't exist
+        if counters_collection.count_documents({"_id": "student_submission_id"}) == 0:
+            db_logger.info("Initializing student_submission_id counter")
+            counters_collection.insert_one({"_id": "student_submission_id", "value": 0})
+        else:
+            db_logger.info("student_submission_id counter already exists")
+        
+        db_logger.info(f"MongoDB collections initialized: {mongodb_embeddings_collection}, {mongodb_qa_collection}, student_submissions, counters")
         
         # Initialize db_service with MongoDB connection
         set_db_client(mongo_client, embeddings_collection)
@@ -511,88 +548,87 @@ async def evaluate_text(
     submission: UploadFile = File(...),
     ideal: UploadFile = File(...),
     model: EmbeddingModel = Form(EmbeddingModel.OLLAMA)
-) -> Dict[str, Any]:
-    """Handle DOCX file uploads and perform Q&A evaluation."""
-    
-    # Check if MongoDB is available - required for text evaluation
-    if mongo_client is None or text_rag_processor is None:
-        return {
-            "status": "error",
-            "message": "MongoDB connection is required for text evaluation. Please check your MongoDB URI in the .env file."
-        }
-    
-    # Create temporary files
-    submission_path = None
-    ideal_path = None
-    
-    try:
-        # Process submission file
-        submission_path = os.path.join(tempfile.gettempdir(), f"submission_{submission.filename}")
-        with open(submission_path, "wb") as temp_file:
-            temp_file.write(await submission.read())
-        
-        # Process ideal file
-        ideal_path = os.path.join(tempfile.gettempdir(), f"ideal_{ideal.filename}")
-        with open(ideal_path, "wb") as temp_file:
-            temp_file.write(await ideal.read())
-        
-        # Log file sizes for debugging
-        submission_size = os.path.getsize(submission_path)
-        ideal_size = os.path.getsize(ideal_path)
-        logger.info(f"Evaluating text files - submission: {submission.filename} ({submission_size} bytes), ideal: {ideal.filename} ({ideal_size} bytes)")
-        
-        # Set model based on the dropdown selection only
-        if model == EmbeddingModel.OPENAI:
-            # When OpenAI is selected as the model, ensure we use OpenAI
-            text_rag_processor.use_openai = True
-            logger.info("Using OpenAI for text evaluation (selected from model dropdown)")
-            
-            # Verify OpenAI API key is available - safely access the attribute
-            openai_api_key = getattr(text_rag_processor, 'openai_api_key', None)
-            if not openai_api_key:
-                return {
-                    "status": "error",
-                    "message": "OpenAI API key is required when using OpenAI model. Please check your .env file."
-                }
-        else:  # Ollama is the default
-            text_rag_processor.use_openai = False
-            logger.info("Using Ollama for text evaluation (selected from model dropdown)")
-        
-        # Log final model selection
-        logger.info(f"Final model selection: {'OpenAI' if text_rag_processor.use_openai else 'Ollama'}")
-        
-        # Perform the evaluation
-        logger.info("Starting Q&A evaluation process")
-        evaluation_result = text_rag_processor.evaluate_qa_submission(submission_path, ideal_path)
-        
-        # Ensure the overall_score appears at top level as some UI components expect it
-        if evaluation_result.get("status") == "success" and "overall_score" not in evaluation_result:
-            if "result" in evaluation_result and "overall_score" in evaluation_result["result"]:
-                evaluation_result["overall_score"] = evaluation_result["result"]["overall_score"]
-                logger.debug("Added overall_score at top level for UI compatibility")
-        
-        # Log evaluation completion
-        if evaluation_result.get("status") == "success":
-            score = evaluation_result.get("overall_score", evaluation_result.get("result", {}).get("overall_score", 0))
-            logger.info(f"Q&A evaluation completed successfully with score: {score}%")
-        else:
-            logger.warning(f"Q&A evaluation failed: {evaluation_result.get('message', 'Unknown error')}")
-            
-        return evaluation_result
-        
-    except Exception as e:
-        logger.error(f"Error in text evaluation: {str(e)}")
-        logger.error(traceback.format_exc())
-        return {"status": "error", "message": str(e)}
-    finally:
-        # Clean up temporary files
+):
+    """Stream evaluation progress for DOCX Q&A evaluation."""
+
+    # Read uploaded files into memory first (avoid closed file issue when streaming)
+    submission_bytes = await submission.read()
+    ideal_bytes = await ideal.read()
+    submission_filename = submission.filename
+    ideal_filename = ideal.filename
+
+    def stream_generator():
+        import json, traceback, tempfile, os, datetime
+        def jline(obj):
+            return (json.dumps(obj) + "\n").encode()
+        submission_path = None
+        ideal_path = None
         try:
-            for path in [submission_path, ideal_path]:
-                if path and os.path.exists(path):
-                    os.remove(path)
-                    logger.debug(f"Removed temporary file: {path}")
-        except Exception as cleanup_error:
-            logger.error(f"Error cleaning up temporary files: {cleanup_error}")
+            # Stage 1: embedding (document processing & embedding generation)
+            yield jline({"stage":"embedding","status":"working"})
+            # Save uploads to temp files
+            submission_path = os.path.join(tempfile.gettempdir(), f"submission_{submission_filename}")
+            ideal_path = os.path.join(tempfile.gettempdir(), f"ideal_{ideal_filename}")
+            with open(submission_path, 'wb') as f:
+                f.write(submission_bytes)
+            with open(ideal_path, 'wb') as f:
+                f.write(ideal_bytes)
+
+            # Configure model
+            text_rag_processor.use_openai = (model == EmbeddingModel.OPENAI)
+
+            # Process documents
+            ideal_qa_pairs = text_rag_processor.process_qa_document(ideal_path, is_ideal=True)
+            submission_qa_pairs = text_rag_processor.process_qa_document(submission_path, is_ideal=False)
+            yield jline({"stage":"embedding","status":"success"})
+
+            # Stage 2: mapping
+            yield jline({"stage":"mapping","status":"working"})
+            qa_mappings = text_rag_processor._map_qa_pairs(submission_qa_pairs)
+            yield jline({"stage":"mapping","status":"success"})
+
+            # Stage 3: scoring
+            yield jline({"stage":"scoring","status":"working"})
+            total_questions = len(ideal_qa_pairs)
+            high_matches = sum(1 for m in qa_mappings if m["quality"]=="high")
+            medium_matches = sum(1 for m in qa_mappings if m["quality"]=="medium")
+            low_matches = sum(1 for m in qa_mappings if m["quality"]=="low")
+            poor_matches = sum(1 for m in qa_mappings if m["quality"]=="poor")
+            missing = sum(1 for m in qa_mappings if m["quality"]=="missing")
+            overall_score = round((high_matches*1.0+medium_matches*0.7+low_matches*0.4+poor_matches*0.1)/total_questions*100)
+            yield jline({"stage":"scoring","status":"success"})
+
+            # Stage 4: feedback
+            yield jline({"stage":"feedback","status":"working"})
+            summary = text_rag_processor._generate_summary("", total_questions, high_matches, medium_matches, low_matches, overall_score)
+            evaluations = text_rag_processor._format_evaluations_for_ui(qa_mappings, submission_qa_pairs, ideal_qa_pairs)
+            result_data = {
+                "overall_score": overall_score,
+                "evaluations": evaluations,
+                "summary": summary,
+                "stats": {
+                    "total_questions": total_questions,
+                    "high_count": high_matches,
+                    "medium_count": medium_matches,
+                    "low_count": low_matches,
+                    "poor_count": poor_matches,
+                    "missing_count": missing
+                }
+            }
+            yield jline({"stage":"feedback","status":"success","data": result_data})
+        except Exception as e:
+            yield jline({"stage":"feedback","status":"error","message": str(e)})
+            traceback.print_exc()
+        finally:
+            try:
+                if submission_path and os.path.exists(submission_path):
+                    os.remove(submission_path)
+                if ideal_path and os.path.exists(ideal_path):
+                    os.remove(ideal_path)
+            except Exception:
+                pass
+
+    return StreamingResponse(stream_generator(), media_type="application/json")
 
 @app.post("/estimate-tokens")
 async def estimate_tokens(submission: UploadFile = File(...), ideal: UploadFile = File(...)):
@@ -811,72 +847,7 @@ async def estimate_tokens(submission: UploadFile = File(...), ideal: UploadFile 
 async def main_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/api/process-qa")
-async def process_qa(request: Request):
-    """Process Q&A evaluation request."""
-    try:
-        # Parse the JSON data from the request
-        data = await request.json()
-        
-        if not data:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "No data provided"}
-            )
-            
-        # Extract data fields
-        qa_pairs = data.get('qa_pairs', [])
-        document_id = data.get('document_id')
-        course_context = data.get('course_context', '')
-        emphasize_embedding = data.get('emphasize_embedding', False)
-        
-        if not qa_pairs:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "No Q&A pairs provided"}
-            )
-            
-        if not document_id:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "No document ID provided"}
-            )
-        
-        # Log the request
-        logger.info(f"Processing {len(qa_pairs)} Q&A pairs for document {document_id}")
-        if emphasize_embedding:
-            logger.info("Using embedding-focused similarity for evaluation")
-        
-        # Check if text_rag_processor is available
-        if text_rag_processor is None:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "Text RAG processor is not initialized. Check MongoDB connection."}
-            )
-        
-        # Format Q&A pairs for processing
-        formatted_qa = {}
-        for i, qa in enumerate(qa_pairs):
-            formatted_qa[f"qa_{i}"] = {
-                "question": qa.get("question", ""),
-                "answer": qa.get("answer", "")
-            }
-        
-        # Process the Q&A pairs
-        result = text_rag_processor.process_qa_submission(
-            document_id=document_id,
-            qa_pairs=formatted_qa,
-            emphasize_embedding=emphasize_embedding
-        )
-
-        return result
-    except Exception as e:
-        logger.error(f"Error in process_qa: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+# Removed unused process_qa endpoint
 
 # Entry point to run the application
 if __name__ == "__main__":

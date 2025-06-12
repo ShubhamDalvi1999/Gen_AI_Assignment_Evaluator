@@ -50,6 +50,11 @@ Thumbs.db
 !docs/PY_EVAL_function_flow.md
 
 
+# gitignore
+.gitignore
+
+.cursor
+
 # Zip
 *.zip
 .qodo
