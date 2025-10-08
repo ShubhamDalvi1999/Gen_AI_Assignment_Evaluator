@@ -318,7 +318,7 @@ The resulting analysis provides a comprehensive view of structural similarities 
 ## Token Management Implementation
 
 ### 1. Token Counting and Budgeting
-- **Implementation**: `utils.tokenizer_utils` module
+- **Implementation**: `backend/app/utils/tokenizer_utils` module
 - **Purpose**: Ensure prompts stay within LLM context limits (100k tokens)
 - **Process**:
   - Uses `tiktoken` to accurately count tokens

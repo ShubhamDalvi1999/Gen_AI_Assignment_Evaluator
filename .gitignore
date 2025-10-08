@@ -48,6 +48,19 @@ Thumbs.db
 !docs/DOCX_EVALUATION_flow.md
 !docs/ARCHITECTURE.md
 !docs/PY_EVAL_function_flow.md
+!docs/CELERY_SEQUENCE_DIAGRAMS.md
+
+# legacy 
+app_legacy.py
+realistic_load_test.py
+setup-env.py
+start_backend_optimized.py
+run.py
+start_backend_optimized.py
+test_api_endpoints.py
+test_load_api.py
+scripts/
+
 
 
 # gitignore
@@ -62,6 +75,8 @@ Thumbs.db
 
 # test_files
 test_data/
+text_data/
+
 
 # images
 *.png
@@ -78,4 +93,14 @@ test_data/
 
 #environment variables
 .env
+env.example
+env.docker.example
+docker.env
+
+# sh files
+*.sh
+
+# results files 
+qa_files/
+
 
